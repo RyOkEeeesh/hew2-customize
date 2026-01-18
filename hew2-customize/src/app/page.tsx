@@ -155,7 +155,7 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material; [key: string]: any }
       <group>
         <mesh position={[0, -THICKNESS / 2, 0]}>
           <latheGeometry args={[lathePoints, 128]} />
-          <meshStandardMaterial {...materialOfColor[mat]} side={THREE.DoubleSide} />
+          <meshStandardMaterial {...materialOfColor[mat as Material]} side={THREE.DoubleSide} />
         </mesh>
         <mesh
           ref={ref}
