@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
 } from "react";
+import { CookiesProvider, useCookies } from 'react-cookie';
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
@@ -141,7 +142,7 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 // Components
 // ------------------------------
 
-const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material; [key: string]: any }>(
+const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>(
   ({ mat, ...props }, ref) => {
     const lathePoints = [
       new THREE.Vector2(0, 0),
@@ -175,7 +176,7 @@ function Scene() {
   const groupRef = useRef<THREE.Group>(null!);
   const editMeshRef = useRef<THREE.Mesh>(null!);
   const drawingMeshRef = useRef<THREE.Mesh>(null!);
-  
+
   const [isDrawing, setIsDrawing] = useState(false);
   const pointsRef = useRef<THREE.Vector2Like[]>([]);
   const isPointsUpdateRef = useRef(false);
@@ -192,28 +193,25 @@ function Scene() {
   });
 
   // --- Event Handlers ---
+  const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     if (e.button !== 0) return;
-
     setIsDrawing(true);
-    const localPoint = editMeshRef.current.worldToLocal(e.point.clone());
-    pointsRef.current = [{ x: localPoint.x, y: localPoint.y }];
+    pointerEventTmpVec3.current.copy(e.point);
+    editMeshRef.current.worldToLocal(pointerEventTmpVec3.current);
+    pointsRef.current = [{ x: pointerEventTmpVec3.current.x, y: pointerEventTmpVec3.current.y }];
     isPointsUpdateRef.current = true;
   };
 
   const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (!isDrawing) return;
     e.stopPropagation();
-
-    const localPoint = editMeshRef.current.worldToLocal(e.point.clone());
-    const lastPoint = pointsRef.current[pointsRef.current.length - 1];
-    
-    // 間引き処理
-    const dist = Math.hypot(localPoint.x - lastPoint.x, localPoint.y - lastPoint.y);
-    if (dist < 0.1) return;
-
-    pointsRef.current.push({ x: localPoint.x, y: localPoint.y });
+    e.stopPropagation();
+    pointerEventTmpVec3.current.copy(e.point);
+    editMeshRef.current.worldToLocal(pointerEventTmpVec3.current)
+    if (pointsRef.current.length && pointerEventTmpVec3.current.distanceTo(getVec3Like(pointsRef.current[pointsRef.current.length - 1])) < 0.1) return;
+    pointsRef.current.push({ x: pointerEventTmpVec3.current.x, y: pointerEventTmpVec3.current.y });
     isPointsUpdateRef.current = true;
   };
 
@@ -232,14 +230,14 @@ function Scene() {
     // 2. 位置合わせ
     mesh.position.copy(editMeshRef.current.position);
     mesh.rotation.copy(editMeshRef.current.rotation);
-    
+
     // 3. 親に追加（Sceneへの反映）
     groupRef.current.add(mesh);
 
     // 4. コマンドオブジェクトを作成してZustandにPush
     // クラスではなく、クロージャを使ったオブジェクトを作成
     const parent = groupRef.current;
-    
+
     const command: Command = {
       undo: () => {
         parent.remove(mesh);
@@ -257,12 +255,12 @@ function Scene() {
 
   return (
     <>
-      <PerspectiveCamera makeDefault position={[0, 15, 15]} fov={45} />
+      <PerspectiveCamera makeDefault position={[0, 20, 0]} fov={45} />
       {/* 描画中は回転させない */}
       <OrbitControls makeDefault enableRotate={!isDrawing} />
 
-      <ambientLight intensity={0.5} />
-      <pointLight position={[10, 10, 10]} intensity={1} />
+      <ambientLight color={0xffffff} intensity={1} />
+      <directionalLight position={[0, 30, 0]} intensity={0.4} />
 
       <group ref={groupRef}>
         <ManholeMesh
@@ -274,8 +272,8 @@ function Scene() {
         />
 
         {/* 描画中のプレビュー用メッシュ */}
-        <mesh 
-          ref={drawingMeshRef} 
+        <mesh
+          ref={drawingMeshRef}
           visible={isDrawing}
           position={[0, THICKNESS / 2 - DENT, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
@@ -323,16 +321,16 @@ function HtmlUI() {
   }, [undo, redo]);
 
   return (
-    <div style={{ position: "absolute", top: 20, left: 20, zIndex: 10, display: "flex", gap: "10px" }}>
-      <button 
-        style={{ padding: "8px 16px", cursor: canUndo ? "pointer" : "not-allowed", opacity: canUndo ? 1 : 0.5 }} 
+    <div className="flex gap-10">
+      <button
+        style={{ padding: "8px 16px", cursor: canUndo ? "pointer" : "not-allowed", opacity: canUndo ? 1 : 0.5 }}
         onClick={undo}
         disabled={!canUndo}
       >
         Undo
       </button>
-      <button 
-        style={{ padding: "8px 16px", cursor: canRedo ? "pointer" : "not-allowed", opacity: canRedo ? 1 : 0.5 }} 
+      <button
+        style={{ padding: "8px 16px", cursor: canRedo ? "pointer" : "not-allowed", opacity: canRedo ? 1 : 0.5 }}
         onClick={redo}
         disabled={!canRedo}
       >
@@ -342,16 +340,51 @@ function HtmlUI() {
   );
 }
 
+type EditType = 'pen' | 'line' | 'bucket' | 'shapes' | 'move';
+
+type ToolBarBtnProps = {
+  onClick: () => void;
+  children: React.ReactNode;
+}
+
+function ToolBarBtn({ onClick, children }: ToolBarBtnProps) {
+  return <button className="h-10 w-10 flex items-center justify-center" onClick={onClick}>{children}</button>
+}
+
+function ToolBar() {
+  function handleBtnClick(type: EditType) {
+    // if (editor !== type) setEditor(type);
+  }
+  return (
+    <nav className="flex gap-4">
+      {/* {Object.entries(editorOptions).map(([k, v]) => (<ToolBarBtn key={k} onClick={() => handleBtnClick(k as EditType)}>{v.jsx}</ToolBarBtn>))} */}
+    </nav>
+  )
+}
+
+function ToolOption() {
+  const [cookies, setCookie, removeCookie] = useCookies(['customize-options']);
+  console.log(cookies)
+  return null;
+}
+
 // ------------------------------
 // Main App
 // ------------------------------
 export default function App() {
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#222", position: "relative" }}>
-      <HtmlUI />
-      <Canvas shadows>
+    <CookiesProvider>
+      <header className="h-header-h w-screen bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+        <ToolBar />
+        <ToolOption />
+        <HtmlUI />
+      </header>
+      <Canvas
+        className="block"
+        style={{ background: "#d4d4d4", height: "calc(100vh - var(--header-h))" }}
+      >
         <Scene />
       </Canvas>
-    </div>
+    </CookiesProvider>
   );
 }

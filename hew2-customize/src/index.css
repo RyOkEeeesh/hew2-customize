@@ -1,70 +1,78 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --background: #ffffff;
+  --foreground: #171717;
+  --header-h: 5rem;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+@theme {
+  --spacing-header-h: var(--header-h);
 }
-a:hover {
-  color: #535bf2;
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+@layer components {
+  .signInBtn {
+    @apply gap-5 flex px-5 pb-12 pt-2 items-center justify-center;
+    button {
+      @apply rounded-full px-3 hover:text-[#FFAE46] text-gray-500;
+      * {
+        @apply duration-300 cursor-pointer;
+      }
+    }
+  }
+  .loginText {
+    @apply justify-center items-center flex flex-col pb-10 pt-2 gap-10;
+    input {
+      @apply w-[90%] border-b-2 text-xl border-gray-400 outline-none pl-2 leading-none focus:border-[#FFAE46] duration-150 ease-in-out;
+      caret-color: var(--color-gray-700);
+    }
+  }
+  .line {
+    @apply px-2 gap-2 text-gray-500 w-full flex justify-center items-center;
+    div {
+      @apply h-1 w-full rounded-3xl bg-gray-400;
+    }
+  }
+}
+
+@layer custamize {
+  .customize__canvas {
+    display: block;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+.grybg {
+  background-color: #d9d9d9;
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
 }
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+.logo {
+  background-color: #ffffff;
+  mask-image: url("/logo.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
 }
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
+.nv {
+  height: calc(100% - var(--spacing) * 20);
 }
-button:hover {
-  border-color: #646cff;
+#nav-toggle:checked ~ .toggle-button .open-icon {
+  display: none;
 }
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+#nav-toggle:checked ~ .toggle-button .close-icon {
+  display: block;
 }
