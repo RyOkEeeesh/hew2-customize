@@ -16,7 +16,9 @@
     "react": "^19.2.0",
     "react-cookie": "^8.0.1",
     "react-dom": "^19.2.0",
-    "three": "^0.182.0"
+    "three": "^0.182.0",
+    "three-bvh-csg": "^0.0.17",
+    "three-csg-ts": "^3.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

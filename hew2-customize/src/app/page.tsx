@@ -15,14 +15,14 @@ import {
   GizmoViewport,
 } from "@react-three/drei";
 import { create } from "zustand";
-import { useShallow } from 'zustand/react/shallow'
+import { useShallow } from 'zustand/react/shallow';
 
 // ------------------------------
 // Constants & Types
 // ------------------------------
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
-const DENT = 0.07;
+const DENT = 0.15;
 const DIFFERENCE = 0.4;
 
 type Material = "metal" | "plastic";
@@ -107,33 +107,85 @@ function toFloat32Arr(v: THREE.Vector3Like[]) {
   return positions;
 }
 
+function getMats(mesh: THREE.Mesh): THREE.Material[] {
+  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+}
+
+function meshMatrixUpdate(mesh: THREE.Mesh) {
+  mesh.updateMatrix();
+  mesh.updateMatrixWorld();
+}
+
+function meshAttrDispose(mesh: THREE.Mesh): void {
+  mesh.geometry.dispose();
+  getMats(mesh).forEach(m => m.dispose());
+}
+
 const tmpDir = new THREE.Vector2();
 const tmpNormal = new THREE.Vector2();
 
-function generateStrokePoints(points: THREE.Vector2Like[], radius: number) {
-  const vertices: THREE.Vector2Like[] = [];
+function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) {
+  if (points.length < 2) {
+    geo.deleteAttribute("position");
+    geo.setIndex(null);
+    return;
+  }
+
+  const radius = 0.15;
+  const depth = DENT;
+  const vertices: number[] = [];
+  const indices: number[] = [];
+
   for (let i = 0; i < points.length; i++) {
     const curr = points[i];
+
     if (i < points.length - 1)
       tmpDir.set(points[i + 1].x - curr.x, points[i + 1].y - curr.y).normalize();
     else if (i > 0)
       tmpDir.set(curr.x - points[i - 1].x, curr.y - points[i - 1].y).normalize();
 
     tmpNormal.set(-tmpDir.y, tmpDir.x).multiplyScalar(radius);
-    vertices.push({ x: curr.x + tmpNormal.x, y: curr.y + tmpNormal.y });
-    vertices.push({ x: curr.x - tmpNormal.x, y: curr.y - tmpNormal.y });
-  }
-  return vertices;
-}
 
-function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) {
-  if (points.length < 2) return;
-  const strokePoints = generateStrokePoints(points, 0.15).map(getVec3Like);
-  // Z-fighting防止のオフセット
-  const positions = toFloat32Arr([
-    ...strokePoints.map((p) => ({ ...p, z: 0.01 })),
-  ]);
-  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    // 頂点定義 (0:上左, 1:上右, 2:底左, 3:底右)
+    vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, depth);
+    vertices.push(curr.x - tmpNormal.x, curr.y - tmpNormal.y, depth);
+    vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, 0);
+    vertices.push(curr.x - tmpNormal.x, curr.y - tmpNormal.y, 0);
+
+    const currIdx = 4 * i;
+
+    // --- 始点の蓋 (i = 0) ---
+    if (i === 0) {
+      indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
+      indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
+    }
+
+    // --- 胴体部分の面 ---
+    if (i > 0) {
+      const prev = 4 * (i - 1);
+      // 上面
+      indices.push(prev + 0, prev + 1, currIdx + 0);
+      indices.push(prev + 1, currIdx + 1, currIdx + 0);
+      // 底面
+      indices.push(prev + 2, currIdx + 2, prev + 3);
+      indices.push(prev + 3, currIdx + 2, currIdx + 3);
+      // 側面（左）
+      indices.push(prev + 0, currIdx + 0, prev + 2);
+      indices.push(prev + 2, currIdx + 0, currIdx + 2);
+      // 側面（右）
+      indices.push(prev + 1, prev + 3, currIdx + 1);
+      indices.push(prev + 3, currIdx + 3, currIdx + 1);
+    }
+
+    // --- 終点の蓋 (i = 最後) ---
+    if (i === points.length - 1 && i > 0) {
+      indices.push(currIdx + 0, currIdx + 1, currIdx + 2);
+      indices.push(currIdx + 1, currIdx + 3, currIdx + 2);
+    }
+  }
+
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
   geo.attributes.position.needsUpdate = true;
 }
@@ -141,7 +193,6 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 // ------------------------------
 // Components
 // ------------------------------
-
 const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>(
   ({ mat, ...props }, ref) => {
     const lathePoints = [
@@ -150,10 +201,11 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
       new THREE.Vector2(EXTERNAL_SHAPE, THICKNESS),
       new THREE.Vector2(EXTERNAL_SHAPE - DIFFERENCE, THICKNESS),
       new THREE.Vector2(EXTERNAL_SHAPE - DIFFERENCE, THICKNESS - DENT),
+      new THREE.Vector2(0, THICKNESS - DENT),
     ];
 
     return (
-      <group>
+      <>
         <mesh position={[0, -THICKNESS / 2, 0]}>
           <latheGeometry args={[lathePoints, 128]} />
           <meshStandardMaterial {...materialOfColor[mat as Material]} side={THREE.DoubleSide} />
@@ -165,9 +217,9 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
           {...props}
         >
           <circleGeometry args={[EXTERNAL_SHAPE - DIFFERENCE, 128]} />
-          <meshStandardMaterial color="#333" transparent opacity={0.1} />
+          <meshStandardMaterial transparent opacity={0} />
         </mesh>
-      </group>
+      </>
     );
   }
 );
@@ -184,7 +236,6 @@ function Scene() {
   // Zustandからアクションを取得
   const pushCommand = useStore((state) => state.pushCommand);
 
-  // --- Rendering Loop (Preview Update) ---
   useFrame(() => {
     if (isDrawing && isPointsUpdateRef.current && drawingMeshRef.current) {
       updateGeometry(drawingMeshRef.current.geometry, pointsRef.current);
@@ -215,21 +266,35 @@ function Scene() {
     isPointsUpdateRef.current = true;
   };
 
-  const onPointerUp = () => {
+  const handleFinDrawing = () => {
     if (!isDrawing) return;
     setIsDrawing(false);
 
-    if (pointsRef.current.length < 2) return;
+    if (pointsRef.current.length < 2) {
+      drawingMeshRef.current.geometry.deleteAttribute("position");
+      return;
+    }
 
     // 1. メッシュの生成
     const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
-    const mat = new THREE.MeshStandardMaterial({ color: "orange", side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({
+      color: "orange",
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
+    });
     const mesh = new THREE.Mesh(geo, mat);
 
     // 2. 位置合わせ
     mesh.position.copy(editMeshRef.current.position);
     mesh.rotation.copy(editMeshRef.current.rotation);
+
+    meshMatrixUpdate(mesh);
+
+    console.log(editMeshRef.current.position)
+    console.log(mesh.position)
 
     // 3. 親に追加（Sceneへの反映）
     groupRef.current.add(mesh);
@@ -251,7 +316,10 @@ function Scene() {
 
     // リセット
     pointsRef.current = [];
+    drawingMeshRef.current.geometry.deleteAttribute("position");
+    drawingMeshRef.current.geometry.setIndex(null);
   };
+
 
   return (
     <>
@@ -268,7 +336,8 @@ function Scene() {
           mat="metal"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
+          onPointerUp={handleFinDrawing}
+          onPointerLeave={handleFinDrawing}
         />
 
         {/* 描画中のプレビュー用メッシュ */}
