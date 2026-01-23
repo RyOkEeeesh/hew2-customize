@@ -1,11 +1,8 @@
 /// <reference lib="webworker" />
 
-export type IslandMsgData = {
-  positions: Float32Array;
-  normals: Float32Array;
-};
+import type { IslMsg } from "./types";
 
-function separateIslands(positions: Float32Array, normals: Float32Array) {
+function separateIslands({ positions, normals }: IslMsg) {
   const numFaces = positions.length / 9;
   const faceVisited = new Uint8Array(numFaces);
   const islands: { position: Float32Array; normal: Float32Array }[] = [];
@@ -62,10 +59,8 @@ function separateIslands(positions: Float32Array, normals: Float32Array) {
   return islands;
 }
 
-self.onmessage = (e: MessageEvent<IslandMsgData>) => {
-  const { positions, normals } = e.data;
-  const islands = separateIslands(positions, normals);
-  
-  const transfer = islands.flatMap(isl => [isl.position.buffer, isl.normal.buffer]);
-  self.postMessage({ success: true, islands }, transfer);
+self.onmessage = (e: MessageEvent<IslMsg>) => {
+  const result = separateIslands(e.data);
+  const transfer = result.flatMap(isl => [isl.position.buffer, isl.normal.buffer]);
+  self.postMessage({ success: true, result }, transfer);
 };

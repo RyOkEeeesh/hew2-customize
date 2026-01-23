@@ -1,60 +1,62 @@
 /// <reference lib="webworker" />
 
-import { CSG } from 'three-csg-ts';
-import * as THREE from 'three';
+import * as THREE from "three";
+import * as CSG from "three-bvh-csg"; // three-bvh-csg をインポート
+import type { CSGMsg } from "./types";
 
-export type CSGType = 'union' | 'sub' | 'intersect';
-
-export type CSGMsg = {
-  type: CSGType;
-  obj: {
-    positionA: THREE.TypedArray;
-    normalA: THREE.TypedArray;
-    indexA?: THREE.TypedArray;
-    positionB: THREE.TypedArray;
-    normalB: THREE.TypedArray;
-    indexB?: THREE.TypedArray;
-  };
-};
+const evaluator = new CSG.Evaluator();
 
 self.onmessage = (e: MessageEvent<CSGMsg>) => {
   try {
     const { type, obj } = e.data;
 
-    const geoA = new THREE.BufferGeometry();
-    geoA.setAttribute('position', new THREE.BufferAttribute(new Float32Array(obj.positionA), 3));
-    geoA.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(obj.normalA), 3));
-    if (obj.indexA) geoA.setIndex(new THREE.BufferAttribute(new Uint32Array(obj.indexA), 1));
+    const createGeo = (
+      pos: THREE.TypedArray,
+      norm: THREE.TypedArray,
+      index?: THREE.TypedArray,
+    ) => {
+      const geo = new THREE.BufferGeometry();
 
-    const geoB = new THREE.BufferGeometry();
-    geoB.setAttribute('position', new THREE.BufferAttribute(new Float32Array(obj.positionB), 3));
-    geoB.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(obj.normalB), 3));
-    if (obj.indexB) geoB.setIndex(new THREE.BufferAttribute(new Uint32Array(obj.indexB), 1));
+      const posAttr = pos instanceof Float32Array ? pos : new Float32Array(pos);
+      const normAttr = norm instanceof Float32Array ? norm : new Float32Array(norm);
 
-    const meshA = new THREE.Mesh(geoA);
-    const meshB = new THREE.Mesh(geoB);
+      geo.setAttribute("position", new THREE.BufferAttribute(posAttr, 3));
+      geo.setAttribute("normal", new THREE.BufferAttribute(normAttr, 3));
 
-    meshA.updateMatrixWorld();
-    meshB.updateMatrixWorld();
-    geoA.applyMatrix4(meshA.matrixWorld);
-    geoB.applyMatrix4(meshB.matrixWorld);
+      if (index) {
+        const indexAttr = index instanceof Uint32Array ? index : new Uint32Array(index);
+        geo.setIndex(new THREE.BufferAttribute(indexAttr, 1));
+      }
 
-    const result =
-      type === 'union'
-        ? CSG.union(meshA, meshB)
-        : type === 'sub'
-          ? CSG.subtract(meshA, meshB)
-          : CSG.intersect(meshA, meshB);
+      return geo;
+    };
 
-    const resultGeo = result.geometry.toNonIndexed();
+    const geoA = createGeo(obj.positionA, obj.normalA, obj.indexA);
+    const geoB = createGeo(obj.positionB, obj.normalB, obj.indexB);
 
-    const position = resultGeo.getAttribute('position')?.array as Float32Array;
-    const normal = resultGeo.getAttribute('normal')?.array as Float32Array;
-    const index = resultGeo.index ? (resultGeo.index.array as Uint32Array) : null;
+    const brushA = new CSG.Brush(geoA);
+    const brushB = new CSG.Brush(geoB);
 
-    const transfer: ArrayBufferLike[] = [];
-    if (position) transfer.push(position.buffer);
-    if (normal) transfer.push(normal.buffer);
+    brushA.updateMatrixWorld();
+    brushB.updateMatrixWorld();
+
+    const opType =
+      type === "union"
+        ? CSG.ADDITION
+        : type === "sub"
+          ? CSG.SUBTRACTION
+          : CSG.INTERSECTION;
+
+    const resultMesh = evaluator.evaluate(brushA, brushB, opType );
+    const resultGeo = resultMesh.geometry;
+
+    const position = resultGeo.getAttribute("position").array as Float32Array;
+    const normal = resultGeo.getAttribute("normal").array as Float32Array;
+    const index = resultGeo.index
+      ? (resultGeo.index.array as Uint32Array)
+      : null;
+
+    const transfer: ArrayBufferLike[] = [position.buffer, normal.buffer];
     if (index) transfer.push(index.buffer);
 
     self.postMessage(
@@ -62,13 +64,17 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
         success: true,
         result: { position, normal, index },
       },
-      transfer
+      transfer,
     );
+
+    geoA.dispose();
+    geoB.dispose();
+    resultGeo.dispose();
   } catch (err: any) {
-    console.error('CSG worker error:', err);
+    console.error("CSGworker error:", err);
     self.postMessage({
       success: false,
-      error: err?.message ?? 'Unknown error',
+      error: err?.message ?? "Unknown error",
     });
   }
 };

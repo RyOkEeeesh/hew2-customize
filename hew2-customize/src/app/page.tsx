@@ -3,19 +3,23 @@ import React, {
   useRef,
   useState,
   useEffect,
-} from "react";
+  useMemo,
+  useCallback,
+} from 'react';
 import { CookiesProvider, useCookies } from 'react-cookie';
-import * as THREE from "three";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import type { ThreeEvent } from "@react-three/fiber";
+import * as THREE from 'three';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import type { ThreeEvent } from '@react-three/fiber';
 import {
   OrbitControls,
   PerspectiveCamera,
   GizmoHelper,
   GizmoViewport,
-} from "@react-three/drei";
-import { create } from "zustand";
+} from '@react-three/drei';
+import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
+import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
+import { getVec3Like, meshMatrixUpdate } from './threeUnits';
 
 // ------------------------------
 // Constants & Types
@@ -25,11 +29,11 @@ const THICKNESS = 0.5;
 const DENT = 0.15;
 const DIFFERENCE = 0.4;
 
-type Material = "metal" | "plastic";
+type Material = 'metal' | 'plastic';
 
 const materialOfColor: Record<Material, THREE.MeshStandardMaterialParameters> = {
-  metal: { color: "#666666", metalness: 0.6, roughness: 0.4 },
-  plastic: { color: "#eeeeee", metalness: 0.1, roughness: 0.8 },
+  metal: { color: '#666666', metalness: 0.6, roughness: 0.4 },
+  plastic: { color: '#eeeeee', metalness: 0.1, roughness: 0.8 },
 };
 
 // ------------------------------
@@ -90,43 +94,116 @@ const useStore = create<DrawingState>((set, get) => ({
   },
 }));
 
+// webWorker
+
+export function useWebWorker() {
+  const csgWorkerRef = useRef<Worker | null>(null);
+  const islWorkerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    const csg = new Worker(new URL('./CSGWorker.ts', import.meta.url), { type: 'module' });
+    const isl = new Worker(new URL('./islWorker.ts', import.meta.url), { type: 'module' });
+    csgWorkerRef.current = csg;
+    islWorkerRef.current = isl;
+    return () => {
+      csg.terminate();
+      isl.terminate();
+    };
+  }, []);
+
+  const CSGWorker = csgWorkerRef.current;
+  const islWorker = islWorkerRef.current;
+
+  function postCsgWorker(meshA: THREE.Mesh, meshB: THREE.Mesh, type: CSGType): Promise<CSGResult> {
+    return new Promise((resolve, reject) => {
+      if (!CSGWorker) return reject(new Error('CSGWorker not initialized'));
+
+      const handleMessage = (e: MessageEvent<CSGResult>) => {
+        CSGWorker.removeEventListener('message', handleMessage);
+        CSGWorker.removeEventListener('error', handleError);
+        if (e.data.success) resolve(e.data);
+        else reject(new Error(e.data.error || 'CSG calculation failed'));
+      };
+
+      const handleError = (err: ErrorEvent) => {
+        CSGWorker.removeEventListener('message', handleMessage);
+        CSGWorker.removeEventListener('error', handleError);
+        reject(err);
+      };
+
+      CSGWorker.addEventListener('message', handleMessage);
+      CSGWorker.addEventListener('error', handleError);
+
+      const msg: CSGMsg = {
+        type,
+        obj: {
+          positionA: meshA.geometry.attributes.position.array,
+          normalA: meshA.geometry.attributes.normal.array,
+          indexA: meshA.geometry.index?.array,
+          positionB: meshB.geometry.attributes.position.array,
+          normalB: meshB.geometry.attributes.normal.array,
+          indexB: meshB.geometry.index?.array,
+        }
+      };
+      const transfer: ArrayBufferLike[] = [
+        msg.obj.positionA.buffer,
+        msg.obj.normalA.buffer,
+        msg.obj.positionB.buffer,
+        msg.obj.normalB.buffer,
+      ];
+      if (msg.obj.indexA) transfer.push(msg.obj.indexA.buffer);
+      if (msg.obj.indexB) transfer.push(msg.obj.indexB.buffer);
+
+      CSGWorker.postMessage(msg, transfer);
+    });
+  };
+
+  function postIslWorker(mesh: THREE.Mesh): Promise<IslResult> {
+    return new Promise((resolve, reject) => {
+      if (!islWorker) return reject(new Error('IslWorker not initialized'));
+
+      const handleMessage = (e: MessageEvent<IslResult>) => {
+        islWorker.removeEventListener('message', handleMessage);
+        islWorker.removeEventListener('error', handleError);
+        if (e.data.success) resolve(e.data);
+        else reject(new Error(e.data.error || 'IslWorker calculation failed'));
+      };
+
+      const handleError = (err: ErrorEvent) => {
+        islWorker.removeEventListener('message', handleMessage);
+        islWorker.removeEventListener('error', handleError);
+        reject(err);
+      };
+
+      islWorker.addEventListener('message', handleMessage);
+      islWorker.addEventListener('error', handleError);
+
+      const msg: IslMsg = {
+        positions: mesh.geometry.attributes.position.array,
+        normals: mesh.geometry.attributes.normal.array,
+      };
+      const transfer: ArrayBufferLike[] = [
+        msg.positions.buffer,
+        msg.normals.buffer,
+      ];
+
+      islWorker?.postMessage(msg, transfer);
+    })
+  }
+
+  return { postCsgWorker, postIslWorker, CSGWorker, islWorker };
+}
+
 // ------------------------------
 // Geometry Helpers (Pure Functions)
 // ------------------------------
-function getVec3Like(v: THREE.Vector2Like | THREE.Vector3Like) {
-  return { x: v.x, y: v.y, z: ("z" in v ? (v.z ?? 0) : 0) };
-}
-
-function toFloat32Arr(v: THREE.Vector3Like[]) {
-  const positions = new Float32Array(v.length * 3);
-  v.forEach((p, i) => {
-    positions[i * 3] = p.x;
-    positions[i * 3 + 1] = p.y;
-    positions[i * 3 + 2] = p.z;
-  });
-  return positions;
-}
-
-function getMats(mesh: THREE.Mesh): THREE.Material[] {
-  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-}
-
-function meshMatrixUpdate(mesh: THREE.Mesh) {
-  mesh.updateMatrix();
-  mesh.updateMatrixWorld();
-}
-
-function meshAttrDispose(mesh: THREE.Mesh): void {
-  mesh.geometry.dispose();
-  getMats(mesh).forEach(m => m.dispose());
-}
 
 const tmpDir = new THREE.Vector2();
 const tmpNormal = new THREE.Vector2();
 
 function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) {
   if (points.length < 2) {
-    geo.deleteAttribute("position");
+    geo.deleteAttribute('position');
     geo.setIndex(null);
     return;
   }
@@ -158,6 +235,7 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     if (i === 0) {
       indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
       indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
+      break;
     }
 
     // --- 胴体部分の面 ---
@@ -184,7 +262,7 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     }
   }
 
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   geo.attributes.position.needsUpdate = true;
@@ -233,6 +311,8 @@ function Scene() {
   const pointsRef = useRef<THREE.Vector2Like[]>([]);
   const isPointsUpdateRef = useRef(false);
 
+  const { postCsgWorker } = useWebWorker();
+
   // Zustandからアクションを取得
   const pushCommand = useStore((state) => state.pushCommand);
 
@@ -271,7 +351,7 @@ function Scene() {
     setIsDrawing(false);
 
     if (pointsRef.current.length < 2) {
-      drawingMeshRef.current.geometry.deleteAttribute("position");
+      drawingMeshRef.current.geometry.deleteAttribute('position');
       return;
     }
 
@@ -279,7 +359,7 @@ function Scene() {
     const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
     const mat = new THREE.MeshStandardMaterial({
-      color: "orange",
+      color: 'orange',
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -316,7 +396,7 @@ function Scene() {
 
     // リセット
     pointsRef.current = [];
-    drawingMeshRef.current.geometry.deleteAttribute("position");
+    drawingMeshRef.current.geometry.deleteAttribute('position');
     drawingMeshRef.current.geometry.setIndex(null);
   };
 
@@ -333,7 +413,7 @@ function Scene() {
       <group ref={groupRef}>
         <ManholeMesh
           ref={editMeshRef}
-          mat="metal"
+          mat='metal'
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={handleFinDrawing}
@@ -348,11 +428,11 @@ function Scene() {
           rotation={[-Math.PI / 2, 0, 0]}
         >
           <bufferGeometry />
-          <meshStandardMaterial color="orange" side={THREE.DoubleSide} />
+          <meshStandardMaterial color='orange' side={THREE.DoubleSide} />
         </mesh>
       </group>
 
-      <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
+      <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
         <GizmoViewport />
       </GizmoHelper>
     </>
@@ -390,16 +470,16 @@ function HtmlUI() {
   }, [undo, redo]);
 
   return (
-    <div className="flex gap-10">
+    <div className='flex gap-10'>
       <button
-        style={{ padding: "8px 16px", cursor: canUndo ? "pointer" : "not-allowed", opacity: canUndo ? 1 : 0.5 }}
+        style={{ padding: '8px 16px', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }}
         onClick={undo}
         disabled={!canUndo}
       >
         Undo
       </button>
       <button
-        style={{ padding: "8px 16px", cursor: canRedo ? "pointer" : "not-allowed", opacity: canRedo ? 1 : 0.5 }}
+        style={{ padding: '8px 16px', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }}
         onClick={redo}
         disabled={!canRedo}
       >
@@ -417,7 +497,7 @@ type ToolBarBtnProps = {
 }
 
 function ToolBarBtn({ onClick, children }: ToolBarBtnProps) {
-  return <button className="h-10 w-10 flex items-center justify-center" onClick={onClick}>{children}</button>
+  return <button className='h-10 w-10 flex items-center justify-center' onClick={onClick}>{children}</button>
 }
 
 function ToolBar() {
@@ -425,7 +505,7 @@ function ToolBar() {
     // if (editor !== type) setEditor(type);
   }
   return (
-    <nav className="flex gap-4">
+    <nav className='flex gap-4'>
       {/* {Object.entries(editorOptions).map(([k, v]) => (<ToolBarBtn key={k} onClick={() => handleBtnClick(k as EditType)}>{v.jsx}</ToolBarBtn>))} */}
     </nav>
   )
@@ -443,14 +523,14 @@ function ToolOption() {
 export default function App() {
   return (
     <CookiesProvider>
-      <header className="h-header-h w-screen bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">
+      <header className='h-header-h w-screen bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200'>
         <ToolBar />
         <ToolOption />
         <HtmlUI />
       </header>
       <Canvas
-        className="block"
-        style={{ background: "#d4d4d4", height: "calc(100vh - var(--header-h))" }}
+        className='block'
+        style={{ background: '#d4d4d4', height: 'calc(100vh - var(--header-h))' }}
       >
         <Scene />
       </Canvas>
