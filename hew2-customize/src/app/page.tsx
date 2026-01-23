@@ -3,8 +3,6 @@ import React, {
   useRef,
   useState,
   useEffect,
-  useMemo,
-  useCallback,
 } from 'react';
 import { CookiesProvider, useCookies } from 'react-cookie';
 import * as THREE from 'three';
@@ -20,6 +18,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { getVec3Like, meshMatrixUpdate } from './threeUnits';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // ------------------------------
 // Constants & Types
@@ -235,7 +234,6 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     if (i === 0) {
       indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
       indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
-      break;
     }
 
     // --- 胴体部分の面 ---
@@ -346,7 +344,7 @@ function Scene() {
     isPointsUpdateRef.current = true;
   };
 
-  const handleFinDrawing = () => {
+  const handleFinDrawing = async () => {
     if (!isDrawing) return;
     setIsDrawing(false);
 
@@ -356,8 +354,40 @@ function Scene() {
     }
 
     // 1. メッシュの生成
+    const g = new THREE.BufferGeometry();
+    updateGeometry(g, pointsRef.current);
+
+    const m1 = new THREE.Mesh(g);
+    const m2 = m1.clone()
+
+    const data = await postCsgWorker(m1, m2, 'union');
+    if (!data.success || !data.result) {
+      console.error(data.error);
+      return null;
+    }
+
+    const { position, normal, index } = data.result;
     const geo = new THREE.BufferGeometry();
-    updateGeometry(geo, pointsRef.current);
+    geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
+
+    // 2. Normal (法線) の設定
+    // itemSize: 3 (nx, ny, nz)
+    if (normal && normal.length > 0) {
+      geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+    }
+
+    // 3. Index (頂点インデックス) の設定
+    // CSGの結果は基本的にインデックス付きで返ってくることが多い
+    if (index && index.length > 0) {
+      geo.setIndex(new THREE.BufferAttribute(index, 1));
+    }
+
+    // 4. 重要: バウンディングボックス等の計算
+    // これをしないと、カメラの角度によっては急にメッシュが消えたり(Frustum Culling)、
+    // Raycastが当たらなかったりします。
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    geo.setAttribute
     const mat = new THREE.MeshStandardMaterial({
       color: 'orange',
       side: THREE.DoubleSide,
@@ -365,7 +395,9 @@ function Scene() {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1
     });
+
     const mesh = new THREE.Mesh(geo, mat);
+
 
     // 2. 位置合わせ
     mesh.position.copy(editMeshRef.current.position);

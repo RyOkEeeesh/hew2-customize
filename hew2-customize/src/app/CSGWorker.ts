@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import * as THREE from "three";
-import * as CSG from "three-bvh-csg"; // three-bvh-csg をインポート
+import * as CSG from "three-bvh-csg";
 import type { CSGMsg } from "./types";
 
 const evaluator = new CSG.Evaluator();
