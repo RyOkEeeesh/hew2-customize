@@ -96,26 +96,30 @@ const useStore = create<DrawingState>((set, get) => ({
 
 // csg
 
-const evaluator = new CSG.Evaluator();
+// const evaluator = new CSG.Evaluator();
 
 const subMesh = new THREE.Mesh(
-  new THREE.CylinderGeometry(EXTERNAL_SHAPE*2, EXTERNAL_SHAPE*2, DENT, 128),
-  new THREE.MeshNormalMaterial()
+  new THREE.CylinderGeometry(EXTERNAL_SHAPE, EXTERNAL_SHAPE, DENT, 128)
 )
+subMesh.position.set(0, THICKNESS / 2 - DENT / 2, 0);
+subMesh.rotation.set(-Math.PI / 2, 0, 0);
+subMesh.updateMatrixWorld(true);
+subMesh.geometry.applyMatrix4(subMesh.matrixWorld);
 
-function csg(geo1: THREE.BufferGeometry, geo2: THREE.BufferGeometry, type: CSGType) {
-  const b1 = new CSG.Brush(geo1.clone());
-  const b2 = new CSG.Brush(geo2.clone());
-  b1.updateMatrixWorld();
-  b2.updateMatrixWorld();
-  const opType =
-    type === 'union'
-      ? CSG.ADDITION
-      : type === 'sub'
-        ? CSG.SUBTRACTION
-        : CSG.INTERSECTION;
-  return evaluator.evaluate(b1, b2, opType);
-}
+
+// function csg(geo1: THREE.BufferGeometry, geo2: THREE.BufferGeometry, type: CSGType) {
+//   const b1 = new CSG.Brush(geo1.clone());
+//   const b2 = new CSG.Brush(geo2.clone());
+//   b1.updateMatrixWorld();
+//   b2.updateMatrixWorld();
+//   const opType =
+//     type === 'union'
+//       ? CSG.ADDITION
+//       : type === 'sub'
+//         ? CSG.SUBTRACTION
+//         : CSG.INTERSECTION;
+//   return evaluator.evaluate(b1, b2, opType);
+// }
 
 // webWorker
 
@@ -218,6 +222,12 @@ export function useWebWorker() {
   return { postCsgWorker, postIslWorker, CSGWorker: csgWorkerRef.current, islWorker: islWorkerRef.current };
 }
 
+function normalizePositions(geo: THREE.BufferGeometry) {
+  const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.002);
+  cleanedGeo.computeVertexNormals();
+  return cleanedGeo;
+}
+
 // ------------------------------
 // Geometry Helpers (Pure Functions)
 // ------------------------------
@@ -285,15 +295,15 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     }
   }
 
-  const uvCount = vertices.length / 3;
-  const uvs = new Float32Array(uvCount * 2);
-  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-
+  // const uvCount = vertices.length / 3;
+  // const uvs = new Float32Array(uvCount * 2);
+  // geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   geo.setIndex(indices);
   geo.computeVertexNormals();
+  normalizePositions(geo);
   geo.attributes.position.needsUpdate = true;
 }
 
@@ -320,7 +330,7 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
         <mesh
           ref={ref}
           position={[0, THICKNESS / 2 - DENT, 0]}
-          rotation={[-Math.PI / 2, 0, 0]}
+          // rotation={[-Math.PI / 2, 0, 0]}
           {...props}
         >
           <circleGeometry args={[EXTERNAL_SHAPE - DIFFERENCE, 128]} />
@@ -334,8 +344,6 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
 
 
 function Scene() {
-  const { scene } = useThree();
-  scene.add(subMesh);
   const groupRef = useRef<THREE.Group>(null!);
   const editMeshRef = useRef<THREE.Mesh>(null!);
   const drawingMeshRef = useRef<THREE.Mesh>(null!);
@@ -346,7 +354,6 @@ function Scene() {
 
   const { postCsgWorker } = useWebWorker();
 
-  // Zustandからアクションを取得
   const pushCommand = useStore((state) => state.pushCommand);
 
   useFrame(() => {
@@ -356,18 +363,38 @@ function Scene() {
     }
   });
 
-  function normalizePositions(geo: THREE.BufferGeometry) {
-    // 1. 重なっている頂点をくっつけて、インデックスを生成する
-    // (これが normalizePositions でやりたかったことの正解に近い)
-    const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.001);
+  async function landMesh(mesh: THREE.Mesh) {
+    mesh.updateMatrixWorld(true);
 
-    // 2. 法線を再計算してきれいにする
-    cleanedGeo.computeVertexNormals();
+    const drawGeo = mesh.geometry.clone();
+    drawGeo.applyMatrix4(mesh.matrixWorld);
 
-    return cleanedGeo;
+    mesh.position.set(0, 0, 0);
+    mesh.rotation.set(0, 0, 0);
+    mesh.scale.set(1, 1, 1);
+    mesh.updateMatrixWorld(true);
+
+    const subGeo = subMesh.geometry.clone();
+
+    const res = await postCsgWorker(
+      BufferGeometryUtils.mergeVertices(subGeo),
+      BufferGeometryUtils.mergeVertices(drawGeo),
+      'sub'
+    );
+
+    if (res.success && res.result) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(res.result.position), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(res.result.normal), 3));
+      if (res.result.index) {
+        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(res.result.index), 1));
+      }
+      return normalizePositions(geo);
+    }
+
+    return drawGeo;
   }
 
-  // --- Event Handlers ---
   const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -390,7 +417,7 @@ function Scene() {
     isPointsUpdateRef.current = true;
   };
 
-  const handleFinDrawing = () => {
+  const handleFinDrawing = async () => {
     if (!isDrawing) return;
     setIsDrawing(false);
 
@@ -400,18 +427,8 @@ function Scene() {
     }
 
     // 1. メッシュの生成
-    const g = new THREE.BufferGeometry();
-    updateGeometry(g, pointsRef.current);
-    const A = new THREE.Mesh(g);
-
-    A.updateMatrixWorld(true);
-    subMesh.updateMatrixWorld(true);
-    A.geometry.applyMatrix4(A.matrixWorld);
-    subMesh.geometry.applyMatrix4(subMesh.matrixWorld);
-
-    const brush = csg(BufferGeometryUtils.mergeVertices(A.geometry), BufferGeometryUtils.mergeVertices(subMesh.geometry), 'intersect');
-    const geo = brush.geometry.clone();
-    geo.computeVertexNormals();
+    const geo = new THREE.BufferGeometry();
+    updateGeometry(geo, pointsRef.current);
     const mat = new THREE.MeshStandardMaterial({
       color: 'orange',
       side: THREE.DoubleSide,
@@ -419,17 +436,18 @@ function Scene() {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1
     });
-
     const mesh = new THREE.Mesh(geo, mat);
 
     // 2. 位置合わせ
     mesh.position.copy(editMeshRef.current.position);
     mesh.rotation.copy(editMeshRef.current.rotation);
+    mesh.scale.set(1, 1, 1.2);
+    mesh.position.z -= 0.1;
 
     meshMatrixUpdate(mesh);
 
-    console.log(editMeshRef.current.position)
-    console.log(mesh.position)
+    const g = await landMesh(mesh);
+    setGeoTmp(g);
 
     // 3. 親に追加（Sceneへの反映）
     groupRef.current.add(mesh);
@@ -455,26 +473,7 @@ function Scene() {
     drawingMeshRef.current.geometry.setIndex(null);
   };
 
-  // const [geoTmp, setGeoTmp] = useState<THREE.BufferGeometry>(null!);
-
-  // useEffect(() => {
-  //   const geometry = new THREE.BoxGeometry(2, 2, 2);
-  //   const A = new THREE.Mesh(geometry);
-  //   const B = new THREE.Mesh(geometry.clone());
-  //   B.position.set(1, 1, 1);
-
-  //   A.updateMatrixWorld(true);
-  //   B.updateMatrixWorld(true);
-
-  //   A.geometry.applyMatrix4(A.matrixWorld);
-  //   B.geometry.applyMatrix4(B.matrixWorld);
-
-  //   const brush = csg(BufferGeometryUtils.mergeVertices(A.geometry), BufferGeometryUtils.mergeVertices(B.geometry), 'sub');
-  //   const geo = brush.geometry.clone();
-  //   geo.computeVertexNormals();
-
-  //   setGeoTmp(geo);
-  // }, []);
+  const [geoTmp, setGeoTmp] = useState<THREE.BufferGeometry>(null!);
 
   return (
     <>
@@ -485,11 +484,11 @@ function Scene() {
       <ambientLight color={0xffffff} intensity={1} />
       <directionalLight position={[0, 5, 0]} intensity={0.4} />
 
-      {/* {geoTmp && (
-        <mesh geometry={geoTmp}>
-          <meshNormalMaterial />
+      {geoTmp && (
+        <mesh geometry={geoTmp} position={[0, 1, 0]}>
+          <meshStandardMaterial wireframe />
         </mesh>
-      )} */}
+      )}
 
       <group ref={groupRef}>
         <ManholeMesh

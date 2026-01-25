@@ -30,13 +30,16 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
         geo.setIndex(new THREE.BufferAttribute(indexAttr, 1));
       }
 
+      const uvCount = pos.length / 3;
+        const uvs = new Float32Array(uvCount * 2);
+        geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
       return geo;
     };
 
     const geoA = createGeo(obj.positionA, obj.normalA, obj.indexA);
     const geoB = createGeo(obj.positionB, obj.normalB, obj.indexB);
 
-    console.log(geoA, geoB);
 
     const brushA = new CSG.Brush(geoA);
     const brushB = new CSG.Brush(geoB);
