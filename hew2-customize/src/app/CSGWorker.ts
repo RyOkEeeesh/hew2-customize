@@ -18,13 +18,15 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
       const geo = new THREE.BufferGeometry();
 
       const posAttr = pos instanceof Float32Array ? pos : new Float32Array(pos);
-      const normAttr = norm instanceof Float32Array ? norm : new Float32Array(norm);
+      const normAttr =
+        norm instanceof Float32Array ? norm : new Float32Array(norm);
 
       geo.setAttribute("position", new THREE.BufferAttribute(posAttr, 3));
       geo.setAttribute("normal", new THREE.BufferAttribute(normAttr, 3));
 
       if (index) {
-        const indexAttr = index instanceof Uint32Array ? index : new Uint32Array(index);
+        const indexAttr =
+          index instanceof Uint32Array ? index : new Uint32Array(index);
         geo.setIndex(new THREE.BufferAttribute(indexAttr, 1));
       }
 
@@ -33,6 +35,8 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
 
     const geoA = createGeo(obj.positionA, obj.normalA, obj.indexA);
     const geoB = createGeo(obj.positionB, obj.normalB, obj.indexB);
+
+    console.log(geoA, geoB);
 
     const brushA = new CSG.Brush(geoA);
     const brushB = new CSG.Brush(geoB);
@@ -47,15 +51,26 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
           ? CSG.SUBTRACTION
           : CSG.INTERSECTION;
 
-    const resultMesh = evaluator.evaluate(brushA, brushB, opType );
+    const resultMesh = evaluator.evaluate(brushA, brushB, opType);
     const resultGeo = resultMesh.geometry;
 
-    const position = resultGeo.getAttribute("position").array as Float32Array;
-    const normal = resultGeo.getAttribute("normal").array as Float32Array;
+    // position は必ず取得できると仮定しつつ、安全策としてチェック
+    const positionAttr = resultGeo.getAttribute("position");
+    const position = positionAttr
+      ? (positionAttr.array as Float32Array)
+      : new Float32Array(0);
+
+    // normal が存在しない場合（結果が空の場合など）に備える
+    const normalAttr = resultGeo.getAttribute("normal");
+    const normal = normalAttr
+      ? (normalAttr.array as Float32Array)
+      : new Float32Array(0);
+
     const index = resultGeo.index
       ? (resultGeo.index.array as Uint32Array)
       : null;
 
+    // 転送可能オブジェクトのリストを作成
     const transfer: ArrayBufferLike[] = [position.buffer, normal.buffer];
     if (index) transfer.push(index.buffer);
 

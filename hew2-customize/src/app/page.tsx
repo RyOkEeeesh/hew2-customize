@@ -113,8 +113,9 @@ export function useWebWorker() {
   const CSGWorker = csgWorkerRef.current;
   const islWorker = islWorkerRef.current;
 
-  function postCsgWorker(meshA: THREE.Mesh, meshB: THREE.Mesh, type: CSGType): Promise<CSGResult> {
+  function postCsgWorker(geoA: THREE.BufferGeometry, geoB: THREE.BufferGeometry, type: CSGType): Promise<CSGResult> {
     return new Promise((resolve, reject) => {
+      console.log(geoA);
       if (!CSGWorker) return reject(new Error('CSGWorker not initialized'));
 
       const handleMessage = (e: MessageEvent<CSGResult>) => {
@@ -136,14 +137,15 @@ export function useWebWorker() {
       const msg: CSGMsg = {
         type,
         obj: {
-          positionA: meshA.geometry.attributes.position.array,
-          normalA: meshA.geometry.attributes.normal.array,
-          indexA: meshA.geometry.index?.array,
-          positionB: meshB.geometry.attributes.position.array,
-          normalB: meshB.geometry.attributes.normal.array,
-          indexB: meshB.geometry.index?.array,
+          positionA: geoA.attributes.position.array.slice(),
+          normalA: geoA.attributes.normal.array.slice(),
+          indexA: geoA.index?.array.slice(),
+          positionB: geoB.attributes.position.array.slice(),
+          normalB: geoB.attributes.normal.array.slice(),
+          indexB: geoB.index?.array.slice(),
         }
       };
+
       const transfer: ArrayBufferLike[] = [
         msg.obj.positionA.buffer,
         msg.obj.normalA.buffer,
@@ -300,6 +302,8 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
   }
 );
 
+
+
 function Scene() {
   const groupRef = useRef<THREE.Group>(null!);
   const editMeshRef = useRef<THREE.Mesh>(null!);
@@ -320,6 +324,17 @@ function Scene() {
       isPointsUpdateRef.current = false;
     }
   });
+
+  function normalizePositions(geo: THREE.BufferGeometry) {
+    // 1. 重なっている頂点をくっつけて、インデックスを生成する
+    // (これが normalizePositions でやりたかったことの正解に近い)
+    const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.001);
+
+    // 2. 法線を再計算してきれいにする
+    cleanedGeo.computeVertexNormals();
+
+    return cleanedGeo;
+  }
 
   // --- Event Handlers ---
   const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
@@ -344,7 +359,7 @@ function Scene() {
     isPointsUpdateRef.current = true;
   };
 
-  const handleFinDrawing = async () => {
+  const handleFinDrawing = () => {
     if (!isDrawing) return;
     setIsDrawing(false);
 
@@ -357,37 +372,7 @@ function Scene() {
     const g = new THREE.BufferGeometry();
     updateGeometry(g, pointsRef.current);
 
-    const m1 = new THREE.Mesh(g);
-    const m2 = m1.clone()
-
-    const data = await postCsgWorker(m1, m2, 'union');
-    if (!data.success || !data.result) {
-      console.error(data.error);
-      return null;
-    }
-
-    const { position, normal, index } = data.result;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
-
-    // 2. Normal (法線) の設定
-    // itemSize: 3 (nx, ny, nz)
-    if (normal && normal.length > 0) {
-      geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
-    }
-
-    // 3. Index (頂点インデックス) の設定
-    // CSGの結果は基本的にインデックス付きで返ってくることが多い
-    if (index && index.length > 0) {
-      geo.setIndex(new THREE.BufferAttribute(index, 1));
-    }
-
-    // 4. 重要: バウンディングボックス等の計算
-    // これをしないと、カメラの角度によっては急にメッシュが消えたり(Frustum Culling)、
-    // Raycastが当たらなかったりします。
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    geo.setAttribute
+    const geo = normalizePositions(g);
     const mat = new THREE.MeshStandardMaterial({
       color: 'orange',
       side: THREE.DoubleSide,
@@ -397,7 +382,6 @@ function Scene() {
     });
 
     const mesh = new THREE.Mesh(geo, mat);
-
 
     // 2. 位置合わせ
     mesh.position.copy(editMeshRef.current.position);
