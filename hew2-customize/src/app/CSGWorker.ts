@@ -71,8 +71,10 @@ self.onmessage = (e: MessageEvent<CSGMsg>) => {
       : null;
 
     // 転送可能オブジェクトのリストを作成
-    const transfer: ArrayBufferLike[] = [position.buffer, normal.buffer];
-    if (index) transfer.push(index.buffer);
+    const transfer: ArrayBufferLike[] = [];
+    if (position.buffer) transfer.push(position.buffer);
+    if (normal.buffer) transfer.push(normal.buffer);
+    if (index?.buffer) transfer.push(index.buffer);
 
     self.postMessage(
       {
