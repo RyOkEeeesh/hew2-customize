@@ -3,6 +3,7 @@ import React, {
   useRef,
   useState,
   useEffect,
+  useLayoutEffect,
 } from 'react';
 import { CookiesProvider, useCookies } from 'react-cookie';
 import * as THREE from 'three';
@@ -16,17 +17,19 @@ import {
 } from '@react-three/drei';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
+// import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types'; // 環境に合わせてパスを確認してください
 import { getVec3Like, meshMatrixUpdate } from './threeUnits';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import * as CSG from 'three-bvh-csg';
+import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
+import { fitObject, fitObjectFast } from './camCtrl';
+
 
 // ------------------------------
 // Constants & Types
 // ------------------------------
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
-const DENT = 0.15;
+const DENT = 0.2;
 const DIFFERENCE = 0.4;
 
 type Material = 'metal' | 'plastic';
@@ -36,11 +39,23 @@ const materialOfColor: Record<Material, THREE.MeshStandardMaterialParameters> = 
   plastic: { color: '#eeeeee', metalness: 0.1, roughness: 0.8 },
 };
 
+const box1 = new THREE.Box3()
+const box2 = new THREE.Box3()
+function checkCollision(mesh1: THREE.Mesh, mesh2: THREE.Mesh): boolean {
+  if (!mesh1 || !mesh2) return false
+  // updateMatrixWorldはコストがかかるため、必要なタイミングでのみ呼ぶのが良いですが、
+  // ここでは念のため呼んでおきます。
+  mesh1.updateMatrixWorld();
+  mesh2.updateMatrixWorld();
+  box1.setFromObject(mesh1)
+  box2.setFromObject(mesh2)
+  return box1.intersectsBox(box2)
+}
+
+
 // ------------------------------
 // Zustand Store (Undo/Redo Logic)
 // ------------------------------
-
-// コマンドの型定義（単なるオブジェクト）
 interface Command {
   undo: () => void;
   redo: () => void;
@@ -57,36 +72,27 @@ interface DrawingState {
 const useStore = create<DrawingState>((set, get) => ({
   undoStack: [],
   redoStack: [],
-
-  // 新しい操作が行われたとき
   pushCommand: (cmd) => {
-    // 実行自体はComponent側で行い、ここではスタック管理のみ行う
     set((state) => ({
       undoStack: [...state.undoStack, cmd],
-      redoStack: [], // 新しい分岐に入ったのでRedoはクリア
+      redoStack: [],
     }));
   },
-
   undo: () => {
     const { undoStack, redoStack } = get();
     if (undoStack.length === 0) return;
-
     const cmd = undoStack[undoStack.length - 1];
-    cmd.undo(); // 実際の取り消し処理を実行
-
+    cmd.undo();
     set({
       undoStack: undoStack.slice(0, -1),
       redoStack: [...redoStack, cmd],
     });
   },
-
   redo: () => {
     const { undoStack, redoStack } = get();
     if (redoStack.length === 0) return;
-
     const cmd = redoStack[redoStack.length - 1];
-    cmd.redo(); // 実際の再実行処理を実行
-
+    cmd.redo();
     set({
       redoStack: redoStack.slice(0, -1),
       undoStack: [...undoStack, cmd],
@@ -94,19 +100,15 @@ const useStore = create<DrawingState>((set, get) => ({
   },
 }));
 
-// csg
-
-const subMesh = new THREE.Mesh(
-  new THREE.CircleGeometry(EXTERNAL_SHAPE - DIFFERENCE, 128),
-)
-
-// webWorker
-
+// ------------------------------
+// WebWorker Hook
+// ------------------------------
 export function useWebWorker() {
   const csgWorkerRef = useRef<Worker | null>(null);
   const islWorkerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
+    // Workerのパスは環境に合わせて調整してください
     const csg = new Worker(new URL('./CSGWorker.ts', import.meta.url), { type: 'module' });
     const isl = new Worker(new URL('./islWorker.ts', import.meta.url), { type: 'module' });
     csgWorkerRef.current = csg;
@@ -116,7 +118,6 @@ export function useWebWorker() {
       isl.terminate();
     };
   }, []);
-
 
   function postCsgWorker(geoA: THREE.BufferGeometry, geoB: THREE.BufferGeometry, type: CSGType): Promise<CSGResult> {
     return new Promise((resolve, reject) => {
@@ -139,15 +140,19 @@ export function useWebWorker() {
       CSGWorker.addEventListener('message', handleMessage);
       CSGWorker.addEventListener('error', handleError);
 
+      // indexがない場合のフォールバック
+      const indexA = geoA.index ? geoA.index.array.slice() : undefined;
+      const indexB = geoB.index ? geoB.index.array.slice() : undefined;
+
       const msg: CSGMsg = {
         type,
         obj: {
           positionA: geoA.attributes.position.array.slice(),
           normalA: geoA.attributes.normal.array.slice(),
-          indexA: geoA.index?.array.slice(),
+          indexA: indexA,
           positionB: geoB.attributes.position.array.slice(),
           normalB: geoB.attributes.normal.array.slice(),
-          indexB: geoB.index?.array.slice(),
+          indexB: indexB,
         }
       };
 
@@ -185,9 +190,11 @@ export function useWebWorker() {
       islWorker.addEventListener('message', handleMessage);
       islWorker.addEventListener('error', handleError);
 
+      const geo = mesh.geometry.clone();
+
       const msg: IslMsg = {
-        positions: mesh.geometry.attributes.position.array,
-        normals: mesh.geometry.attributes.normal.array,
+        positions: geo.attributes.position.array.slice(),
+        normals: geo.attributes.normal.array.slice(),
       };
       const transfer: ArrayBufferLike[] = [
         msg.positions.buffer,
@@ -198,13 +205,12 @@ export function useWebWorker() {
     })
   }
 
-  return { postCsgWorker, postIslWorker, CSGWorker: csgWorkerRef.current, islWorker: islWorkerRef.current };
+  return { postCsgWorker, postIslWorker };
 }
 
 // ------------------------------
-// Geometry Helpers (Pure Functions)
+// Geometry Helpers
 // ------------------------------
-
 const tmpDir = new THREE.Vector2();
 const tmpNormal = new THREE.Vector2();
 
@@ -215,7 +221,7 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     return;
   }
 
-  const radius = 0.15;
+  const radius = 0.1;
   const depth = DENT;
   const vertices: number[] = [];
   const indices: number[] = [];
@@ -230,7 +236,8 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 
     tmpNormal.set(-tmpDir.y, tmpDir.x).multiplyScalar(radius);
 
-    // 頂点定義 (0:上左, 1:上右, 2:底左, 3:底右)
+    // 0:上左, 1:上右, 2:底左, 3:底右
+    // 上面を depth (Z=0.2), 底面を 0 (Z=0) と仮定
     vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, depth);
     vertices.push(curr.x - tmpNormal.x, curr.y - tmpNormal.y, depth);
     vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, 0);
@@ -238,13 +245,13 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 
     const currIdx = 4 * i;
 
-    // --- 始点の蓋 (i = 0) ---
+    // 蓋 (始点)
     if (i === 0) {
       indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
       indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
     }
 
-    // --- 胴体部分の面 ---
+    // 側面・上面・底面
     if (i > 0) {
       const prev = 4 * (i - 1);
       // 上面
@@ -253,31 +260,24 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
       // 底面
       indices.push(prev + 2, currIdx + 2, prev + 3);
       indices.push(prev + 3, currIdx + 2, currIdx + 3);
-      // 側面（左）
+      // 側面
       indices.push(prev + 0, currIdx + 0, prev + 2);
       indices.push(prev + 2, currIdx + 0, currIdx + 2);
-      // 側面（右）
       indices.push(prev + 1, prev + 3, currIdx + 1);
       indices.push(prev + 3, currIdx + 3, currIdx + 1);
     }
 
-    // --- 終点の蓋 (i = 最後) ---
+    // 蓋 (終点)
     if (i === points.length - 1 && i > 0) {
       indices.push(currIdx + 0, currIdx + 1, currIdx + 2);
       indices.push(currIdx + 1, currIdx + 3, currIdx + 2);
     }
   }
 
-  const uvCount = vertices.length / 3;
-  const uvs = new Float32Array(uvCount * 2);
-  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-
   geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  geo.attributes.position.needsUpdate = true;
+  // UVは省略
 }
 
 // ------------------------------
@@ -290,8 +290,8 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
       new THREE.Vector2(EXTERNAL_SHAPE, 0),
       new THREE.Vector2(EXTERNAL_SHAPE, THICKNESS),
       new THREE.Vector2(EXTERNAL_SHAPE - DIFFERENCE, THICKNESS),
-      new THREE.Vector2(EXTERNAL_SHAPE - DIFFERENCE, THICKNESS - DENT),
-      new THREE.Vector2(0, THICKNESS - DENT),
+      new THREE.Vector2(EXTERNAL_SHAPE - DIFFERENCE, THICKNESS - DENT - 0.1),
+      new THREE.Vector2(0, THICKNESS - DENT - 0.1),
     ];
 
     return (
@@ -314,14 +314,13 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
   }
 );
 
-
-
 function Scene() {
-  const { scene } = useThree();
-  scene.add(subMesh);
+  const { camera } = useThree();
+
   const groupRef = useRef<THREE.Group>(null!);
   const convexGroupRef = useRef<THREE.Group>(null!);
-  const concavGroupRef = useRef<THREE.Group>(null!);
+  const concaveGroupRef = useRef<THREE.Group>(null!);
+
   const editMeshRef = useRef<THREE.Mesh>(null!);
   const drawingMeshRef = useRef<THREE.Mesh>(null!);
 
@@ -329,9 +328,7 @@ function Scene() {
   const pointsRef = useRef<THREE.Vector2Like[]>([]);
   const isPointsUpdateRef = useRef(false);
 
-  const { postCsgWorker } = useWebWorker();
-
-  // Zustandからアクションを取得
+  const { postCsgWorker, postIslWorker } = useWebWorker();
   const pushCommand = useStore((state) => state.pushCommand);
 
   useFrame(() => {
@@ -341,59 +338,83 @@ function Scene() {
     }
   });
 
+
   useEffect(() => {
-    if (!editMeshRef.current || !concavGroupRef.current) return;
+    if (!editMeshRef.current || !concaveGroupRef.current) return;
     const mesh = new THREE.Mesh(
       editMeshRef.current.geometry.clone(),
-      new THREE.MeshNormalMaterial()
+      new THREE.MeshStandardMaterial({ wireframe: true }) // 確認用にNormalMaterialを使用
     );
+    // 初期位置合わせ
     mesh.position.copy(editMeshRef.current.position);
+    mesh.position.y += 0.1; // 視認用オフセット
     mesh.rotation.copy(editMeshRef.current.rotation);
-    concavGroupRef.current.add(mesh);
-  }, [])
+    mesh.updateMatrixWorld();
 
-  function normalizePositions(geo: THREE.BufferGeometry) {
-    const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.001);
-    cleanedGeo.computeVertexNormals();
-    return cleanedGeo;
-  }
+    concaveGroupRef.current.add(mesh);
+  }, []);
 
-  async function landMesh(mesh: THREE.Mesh) {
-    mesh.updateMatrixWorld(true);
+  const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
-    const drawGeo = mesh.geometry.clone();
-    drawGeo.applyMatrix4(mesh.matrixWorld);
+  useLayoutEffect(() => {
+  if (!groupRef.current) return;
+  const cam = camera as THREE.PerspectiveCamera;
+  fitObject(cam, groupRef.current, 1.1);
+  cam.updateProjectionMatrix();
+  cameraPosRef.current.copy(cam.position);
+  console.log(cameraPosRef.current)
+}, [camera, groupRef.current]);
 
-    mesh.position.set(0, 0, 0);
-    mesh.rotation.set(0, 0, 0);
-    mesh.scale.set(1, 1, 1);
-    mesh.updateMatrixWorld(true);
+  /**
+     * 描画されたメッシュ(cutter)を使って、targetMeshをくり抜く
+     */
+  async function applySubtraction(targetMesh: THREE.Mesh, cutterMesh: THREE.Mesh): Promise<THREE.Mesh | null> {
+    targetMesh.updateMatrixWorld(true);
+    cutterMesh.updateMatrixWorld(true);
 
-    const subGeo = subMesh.geometry.clone();
+    // 1. ワールド座標系で計算するためにBake（ここまではOK）
+    const targetGeo = BufferGeometryUtils.mergeVertices(targetMesh.geometry.clone());
+    targetGeo.applyMatrix4(targetMesh.matrixWorld);
 
-    const res = await postCsgWorker(
-      BufferGeometryUtils.mergeVertices(subGeo),
-      BufferGeometryUtils.mergeVertices(drawGeo),
-      'sub'
-    );
+    const cutterGeo = BufferGeometryUtils.mergeVertices(cutterMesh.geometry.clone());
+    cutterGeo.applyMatrix4(cutterMesh.matrixWorld);
 
-    const geo = new THREE.BufferGeometry();
+    try {
+      const res = await postCsgWorker(targetGeo, cutterGeo, 'sub');
 
-    if (res.success && res.result) {
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(res.result.position), 3));
-      geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(res.result.normal), 3));
-      if (res.result.index)
-        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(res.result.index), 1));
-    } else {
-      return drawGeo;
+      if (res.success && res.result) {
+        const newGeo = new THREE.BufferGeometry();
+        newGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(res.result.position), 3));
+        newGeo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(res.result.normal), 3));
+        if (res.result.index) {
+          newGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(res.result.index), 1));
+        }
+
+        // ===============================================
+        // ★ここが修正ポイント
+        // ワールド座標になっているジオメトリを、親(concaveGroupRef)のローカル座標に戻す
+        // ===============================================
+        if (targetMesh.parent) {
+          const inverseParentMat = targetMesh.parent.matrixWorld.clone().invert();
+          newGeo.applyMatrix4(inverseParentMat);
+        }
+
+        // メッシュ自体のTransformはリセット（ジオメトリ自体が正しい位置にあるため）
+        const newMesh = new THREE.Mesh(newGeo, targetMesh.material);
+        newMesh.castShadow = true;
+        newMesh.receiveShadow = true;
+
+        return newMesh;
+      }
+    } catch (e) {
+      console.error("CSG Error:", e);
     }
-
-    return normalizePositions(geo);
+    return null;
   }
-
 
   // --- Event Handlers ---
   const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
+
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -407,10 +428,15 @@ function Scene() {
   const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (!isDrawing) return;
     e.stopPropagation();
-    e.stopPropagation();
     pointerEventTmpVec3.current.copy(e.point);
     editMeshRef.current.worldToLocal(pointerEventTmpVec3.current)
-    if (pointsRef.current.length && pointerEventTmpVec3.current.distanceTo(getVec3Like(pointsRef.current[pointsRef.current.length - 1])) < 0.1) return;
+
+    const lastPoint = pointsRef.current[pointsRef.current.length - 1];
+    if (lastPoint) {
+      const dist = Math.sqrt(Math.pow(pointerEventTmpVec3.current.x - lastPoint.x, 2) + Math.pow(pointerEventTmpVec3.current.y - lastPoint.y, 2));
+      if (dist < 0.05) return;
+    }
+
     pointsRef.current.push({ x: pointerEventTmpVec3.current.x, y: pointerEventTmpVec3.current.y });
     isPointsUpdateRef.current = true;
   };
@@ -420,76 +446,75 @@ function Scene() {
     setIsDrawing(false);
 
     if (pointsRef.current.length < 2) {
-      drawingMeshRef.current.geometry.deleteAttribute('position');
+      if (drawingMeshRef.current) drawingMeshRef.current.geometry.deleteAttribute('position');
       return;
     }
 
-    const geo = new THREE.BufferGeometry;
+    // --- 1. Cutter (描いた形状) メッシュの作成 ---
+    const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
-    geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({
-      color: 'orange',
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1
-    });
 
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.scale.set(1, 1, 1.2);
-    mesh.position.y -= 0.2
-    meshMatrixUpdate(mesh);
+    const cutterMesh = new THREE.Mesh(geo);
 
-    const g = await landMesh(mesh);
-    setGeoTmp(g);
+    // 位置合わせ
+    cutterMesh.position.copy(drawingMeshRef.current.position);
+    cutterMesh.rotation.copy(drawingMeshRef.current.rotation);
 
-    // 2. 位置合わせ
-    mesh.position.copy(editMeshRef.current.position);
-    mesh.rotation.copy(editMeshRef.current.rotation);
+    const concaveParent = concaveGroupRef.current;
+    const children = concaveParent.children.filter(o => o instanceof THREE.Mesh) as THREE.Mesh[];
 
-    meshMatrixUpdate(mesh);
+    const convexParent = convexGroupRef.current;
 
-    // 3. 親に追加（Sceneへの反映）
-    concavGroupRef.current.add(mesh);
+    // 衝突しているターゲットを探す
+    const targetMesh = children.find(m => checkCollision(m, cutterMesh));
 
-    // 4. コマンドオブジェクトを作成してZustandにPush
-    // クラスではなく、クロージャを使ったオブジェクトを作成
-    const parent = concavGroupRef.current;
+    if (targetMesh) {
+      // 計算実行
+      const resultMesh = await applySubtraction(targetMesh, cutterMesh);
 
-    const command: Command = {
-      undo: () => {
-        parent.remove(mesh);
-      },
-      redo: () => {
-        parent.add(mesh);
+      if (resultMesh) {
+        const isl = await postIslWorker(resultMesh);
+        console.log(isl);
+        // --- 3. メッシュの入れ替えとUndo/Redo登録 ---
+
+        // シーン更新
+        concaveParent.remove(targetMesh);
+        concaveParent.add(resultMesh);
+        convexParent.add(cutterMesh)
+
+        // コマンド作成
+        const command: Command = {
+          undo: () => {
+            convexParent.remove(cutterMesh)
+            concaveParent.remove(resultMesh);
+            concaveParent.add(targetMesh);
+          },
+          redo: () => {
+            convexParent.add(cutterMesh)
+            concaveParent.remove(targetMesh);
+            concaveParent.add(resultMesh);
+          }
+        };
+
+        pushCommand(command);
       }
-    };
-
-    pushCommand(command);
+    }
 
     // リセット
     pointsRef.current = [];
     drawingMeshRef.current.geometry.deleteAttribute('position');
     drawingMeshRef.current.geometry.setIndex(null);
+    // メモリリーク防止のためジオメトリ破棄
+    geo.dispose();
   };
-
-  const [geoTmp, setGeoTmp] = useState<THREE.BufferGeometry>(null!);
-
 
   return (
     <>
       <PerspectiveCamera makeDefault position={[0, 20, 0]} fov={45} />
-      {/* 描画中は回転させない */}
       <OrbitControls makeDefault enableRotate={!isDrawing} />
 
       <ambientLight color={0xffffff} intensity={1} />
       <directionalLight position={[0, 5, 0]} intensity={0.4} />
-
-      {geoTmp && (
-        <mesh geometry={geoTmp}>
-          <meshStandardMaterial wireframe />
-        </mesh>
-      )}
 
       <group ref={groupRef}>
         <ManholeMesh
@@ -502,8 +527,9 @@ function Scene() {
         />
 
         <group ref={convexGroupRef}></group>
-        <group ref={concavGroupRef}></group>
+        <group ref={concaveGroupRef}></group>
 
+        {/* 描画中のプレビュー用メッシュ */}
         <mesh
           ref={drawingMeshRef}
           visible={isDrawing}
@@ -523,10 +549,9 @@ function Scene() {
 }
 
 // ------------------------------
-// UI Component (Outside Canvas)
+// UI Component (Undo/Redo Button)
 // ------------------------------
 function HtmlUI() {
-  // useShallow で囲むことで、中身が同じなら「変更なし」とみなしてくれる
   const { undo, redo, canUndo, canRedo } = useStore(
     useShallow((state) => ({
       undo: state.undo,
@@ -538,12 +563,10 @@ function HtmlUI() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // ⌘+Z または Ctrl+Z
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         if (e.shiftKey) redo();
         else undo();
       }
-      // ⌘+Y または Ctrl+Y (Redo)
       if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
         redo();
       }
@@ -553,16 +576,16 @@ function HtmlUI() {
   }, [undo, redo]);
 
   return (
-    <div className='flex gap-10'>
+    <div className='flex gap-4 absolute top-4 right-4 z-10'>
       <button
-        style={{ padding: '8px 16px', cursor: canUndo ? 'pointer' : 'not-allowed', opacity: canUndo ? 1 : 0.5 }}
+        className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
         onClick={undo}
         disabled={!canUndo}
       >
         Undo
       </button>
       <button
-        style={{ padding: '8px 16px', cursor: canRedo ? 'pointer' : 'not-allowed', opacity: canRedo ? 1 : 0.5 }}
+        className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
         onClick={redo}
         disabled={!canRedo}
       >
@@ -572,51 +595,21 @@ function HtmlUI() {
   );
 }
 
-type EditType = 'pen' | 'line' | 'bucket' | 'shapes' | 'move';
-
-type ToolBarBtnProps = {
-  onClick: () => void;
-  children: React.ReactNode;
-}
-
-function ToolBarBtn({ onClick, children }: ToolBarBtnProps) {
-  return <button className='h-10 w-10 flex items-center justify-center' onClick={onClick}>{children}</button>
-}
-
-function ToolBar() {
-  function handleBtnClick(type: EditType) {
-    // if (editor !== type) setEditor(type);
-  }
-  return (
-    <nav className='flex gap-4'>
-      {/* {Object.entries(editorOptions).map(([k, v]) => (<ToolBarBtn key={k} onClick={() => handleBtnClick(k as EditType)}>{v.jsx}</ToolBarBtn>))} */}
-    </nav>
-  )
-}
-
-function ToolOption() {
-  const [cookies, setCookie, removeCookie] = useCookies(['customize-options']);
-  console.log(cookies)
-  return null;
-}
-
 // ------------------------------
 // Main App
 // ------------------------------
 export default function App() {
   return (
     <CookiesProvider>
-      <header className='h-header-h w-screen bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200'>
-        <ToolBar />
-        <ToolOption />
+      <div className='w-screen h-screen relative'>
         <HtmlUI />
-      </header>
-      <Canvas
-        className='block'
-        style={{ background: '#d4d4d4', height: 'calc(100vh - var(--header-h))' }}
-      >
-        <Scene />
-      </Canvas>
+        <Canvas
+          className='block'
+          style={{ background: '#d4d4d4', width: '100%', height: 'calc(100vh - var(--header-h))' }}
+        >
+          <Scene />
+        </Canvas>
+      </div>
     </CookiesProvider>
   );
 }
