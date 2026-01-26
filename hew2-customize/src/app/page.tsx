@@ -96,30 +96,9 @@ const useStore = create<DrawingState>((set, get) => ({
 
 // csg
 
-// const evaluator = new CSG.Evaluator();
-
 const subMesh = new THREE.Mesh(
-  new THREE.CylinderGeometry(EXTERNAL_SHAPE, EXTERNAL_SHAPE, DENT, 128)
+  new THREE.CircleGeometry(EXTERNAL_SHAPE - DIFFERENCE, 128),
 )
-subMesh.position.set(0, THICKNESS / 2 - DENT / 2, 0);
-subMesh.rotation.set(-Math.PI / 2, 0, 0);
-subMesh.updateMatrixWorld(true);
-subMesh.geometry.applyMatrix4(subMesh.matrixWorld);
-
-
-// function csg(geo1: THREE.BufferGeometry, geo2: THREE.BufferGeometry, type: CSGType) {
-//   const b1 = new CSG.Brush(geo1.clone());
-//   const b2 = new CSG.Brush(geo2.clone());
-//   b1.updateMatrixWorld();
-//   b2.updateMatrixWorld();
-//   const opType =
-//     type === 'union'
-//       ? CSG.ADDITION
-//       : type === 'sub'
-//         ? CSG.SUBTRACTION
-//         : CSG.INTERSECTION;
-//   return evaluator.evaluate(b1, b2, opType);
-// }
 
 // webWorker
 
@@ -222,12 +201,6 @@ export function useWebWorker() {
   return { postCsgWorker, postIslWorker, CSGWorker: csgWorkerRef.current, islWorker: islWorkerRef.current };
 }
 
-function normalizePositions(geo: THREE.BufferGeometry) {
-  const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.002);
-  cleanedGeo.computeVertexNormals();
-  return cleanedGeo;
-}
-
 // ------------------------------
 // Geometry Helpers (Pure Functions)
 // ------------------------------
@@ -295,15 +268,15 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     }
   }
 
-  // const uvCount = vertices.length / 3;
-  // const uvs = new Float32Array(uvCount * 2);
-  // geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  const uvCount = vertices.length / 3;
+  const uvs = new Float32Array(uvCount * 2);
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
   geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  normalizePositions(geo);
   geo.attributes.position.needsUpdate = true;
 }
 
@@ -330,7 +303,7 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
         <mesh
           ref={ref}
           position={[0, THICKNESS / 2 - DENT, 0]}
-          // rotation={[-Math.PI / 2, 0, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
           {...props}
         >
           <circleGeometry args={[EXTERNAL_SHAPE - DIFFERENCE, 128]} />
@@ -344,7 +317,11 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
 
 
 function Scene() {
+  const { scene } = useThree();
+  scene.add(subMesh);
   const groupRef = useRef<THREE.Group>(null!);
+  const convexGroupRef = useRef<THREE.Group>(null!);
+  const concavGroupRef = useRef<THREE.Group>(null!);
   const editMeshRef = useRef<THREE.Mesh>(null!);
   const drawingMeshRef = useRef<THREE.Mesh>(null!);
 
@@ -354,6 +331,7 @@ function Scene() {
 
   const { postCsgWorker } = useWebWorker();
 
+  // Zustandからアクションを取得
   const pushCommand = useStore((state) => state.pushCommand);
 
   useFrame(() => {
@@ -362,6 +340,23 @@ function Scene() {
       isPointsUpdateRef.current = false;
     }
   });
+
+  useEffect(() => {
+    if (!editMeshRef.current || !concavGroupRef.current) return;
+    const mesh = new THREE.Mesh(
+      editMeshRef.current.geometry.clone(),
+      new THREE.MeshNormalMaterial()
+    );
+    mesh.position.copy(editMeshRef.current.position);
+    mesh.rotation.copy(editMeshRef.current.rotation);
+    concavGroupRef.current.add(mesh);
+  }, [])
+
+  function normalizePositions(geo: THREE.BufferGeometry) {
+    const cleanedGeo = BufferGeometryUtils.mergeVertices(geo, 0.001);
+    cleanedGeo.computeVertexNormals();
+    return cleanedGeo;
+  }
 
   async function landMesh(mesh: THREE.Mesh) {
     mesh.updateMatrixWorld(true);
@@ -382,19 +377,22 @@ function Scene() {
       'sub'
     );
 
+    const geo = new THREE.BufferGeometry();
+
     if (res.success && res.result) {
-      const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(res.result.position), 3));
       geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(res.result.normal), 3));
-      if (res.result.index) {
+      if (res.result.index)
         geo.setIndex(new THREE.BufferAttribute(new Uint32Array(res.result.index), 1));
-      }
-      return normalizePositions(geo);
+    } else {
+      return drawGeo;
     }
 
-    return drawGeo;
+    return normalizePositions(geo);
   }
 
+
+  // --- Event Handlers ---
   const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -426,9 +424,9 @@ function Scene() {
       return;
     }
 
-    // 1. メッシュの生成
-    const geo = new THREE.BufferGeometry();
+    const geo = new THREE.BufferGeometry;
     updateGeometry(geo, pointsRef.current);
+    geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({
       color: 'orange',
       side: THREE.DoubleSide,
@@ -436,25 +434,27 @@ function Scene() {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1
     });
+
     const mesh = new THREE.Mesh(geo, mat);
-
-    // 2. 位置合わせ
-    mesh.position.copy(editMeshRef.current.position);
-    mesh.rotation.copy(editMeshRef.current.rotation);
     mesh.scale.set(1, 1, 1.2);
-    mesh.position.z -= 0.1;
-
+    mesh.position.y -= 0.2
     meshMatrixUpdate(mesh);
 
     const g = await landMesh(mesh);
     setGeoTmp(g);
 
+    // 2. 位置合わせ
+    mesh.position.copy(editMeshRef.current.position);
+    mesh.rotation.copy(editMeshRef.current.rotation);
+
+    meshMatrixUpdate(mesh);
+
     // 3. 親に追加（Sceneへの反映）
-    groupRef.current.add(mesh);
+    concavGroupRef.current.add(mesh);
 
     // 4. コマンドオブジェクトを作成してZustandにPush
     // クラスではなく、クロージャを使ったオブジェクトを作成
-    const parent = groupRef.current;
+    const parent = concavGroupRef.current;
 
     const command: Command = {
       undo: () => {
@@ -475,6 +475,7 @@ function Scene() {
 
   const [geoTmp, setGeoTmp] = useState<THREE.BufferGeometry>(null!);
 
+
   return (
     <>
       <PerspectiveCamera makeDefault position={[0, 20, 0]} fov={45} />
@@ -485,7 +486,7 @@ function Scene() {
       <directionalLight position={[0, 5, 0]} intensity={0.4} />
 
       {geoTmp && (
-        <mesh geometry={geoTmp} position={[0, 1, 0]}>
+        <mesh geometry={geoTmp}>
           <meshStandardMaterial wireframe />
         </mesh>
       )}
@@ -499,6 +500,9 @@ function Scene() {
           onPointerUp={handleFinDrawing}
           onPointerLeave={handleFinDrawing}
         />
+
+        <group ref={convexGroupRef}></group>
+        <group ref={concavGroupRef}></group>
 
         <mesh
           ref={drawingMeshRef}
