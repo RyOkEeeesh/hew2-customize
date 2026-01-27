@@ -17,7 +17,7 @@ import {
 } from '@react-three/drei';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { getVec3Like, meshMatrixUpdate } from './threeUnits';
+// import { getVec3Like, meshMatrixUpdate } from './threeUnits';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { fitObject } from './camCtrl';
@@ -323,7 +323,6 @@ function Scene({ trigger }: SceneProps) {
     fitObject(cam, exportGroupRef.current, 1.1);
     cam.updateProjectionMatrix();
     cameraPosRef.current.copy(cam.position);
-    console.log(cameraPosRef.current)
   }, [camera, exportGroupRef.current]);
 
   useEffect(() => {
@@ -399,15 +398,15 @@ function Scene({ trigger }: SceneProps) {
     concaveGroupRef.current.add(mesh);
   }, []);
 
-  async function applySubtraction(targetMesh: THREE.Mesh, cutterMesh: THREE.Mesh): Promise<THREE.Mesh | null> {
+  async function applySubtraction(targetMesh: THREE.Mesh, convexMesh: THREE.Mesh): Promise<THREE.Mesh | null> {
     targetMesh.updateMatrixWorld(true);
-    cutterMesh.updateMatrixWorld(true);
+    convexMesh.updateMatrixWorld(true);
 
     const targetGeo = BufferGeometryUtils.mergeVertices(targetMesh.geometry.clone());
     targetGeo.applyMatrix4(targetMesh.matrixWorld);
 
-    const cutterGeo = BufferGeometryUtils.mergeVertices(cutterMesh.geometry.clone());
-    cutterGeo.applyMatrix4(cutterMesh.matrixWorld);
+    const cutterGeo = BufferGeometryUtils.mergeVertices(convexMesh.geometry.clone());
+    cutterGeo.applyMatrix4(convexMesh.matrixWorld);
 
     try {
       const res = await postCsgWorker(targetGeo, cutterGeo, 'sub');
@@ -435,6 +434,25 @@ function Scene({ trigger }: SceneProps) {
       console.error("CSG Error:", e);
     }
     return null;
+  }
+
+  async function getSeparateMeshes(mesh: THREE.Mesh) {
+    const res = await postIslWorker(mesh);
+    if (!res.success || !res.result) return null;
+    const meshArr: THREE.Mesh[] = [];
+    for (const { position, normal } of res.result) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+      geo.computeBoundingBox();
+      geo.computeBoundingSphere();
+      meshArr.push(
+        new THREE.Mesh(
+          geo,
+          mesh.material
+        )
+      )
+    }
   }
 
   // --- Event Handlers ---
@@ -474,27 +492,27 @@ function Scene({ trigger }: SceneProps) {
       return;
     }
 
-    // --- 1. Cutter (描いた形状) メッシュの作成 ---
     const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
 
-    const cutterMesh = new THREE.Mesh(geo);
+    const convexMesh = new THREE.Mesh(geo);
 
     // 位置合わせ
-    cutterMesh.position.copy(drawingMeshRef.current.position);
-    cutterMesh.rotation.copy(drawingMeshRef.current.rotation);
+    convexMesh.position.copy(drawingMeshRef.current.position);
+    convexMesh.rotation.copy(drawingMeshRef.current.rotation);
 
     const concaveParent = concaveGroupRef.current;
     const children = concaveParent.children.filter(o => o instanceof THREE.Mesh) as THREE.Mesh[];
+    const targetMeshArr = children.filter(m => checkCollision(m, convexMesh));
 
     const convexParent = convexGroupRef.current;
 
-    // 衝突しているターゲットを探す
-    const targetMesh = children.find(m => checkCollision(m, cutterMesh));
+    if (targetMeshArr.length > 0) {
+      for (const targetMesh of targetMeshArr) {
 
-    if (targetMesh) {
+      }
       // 計算実行
-      const resultMesh = await applySubtraction(targetMesh, cutterMesh);
+      const resultMesh = await applySubtraction(targetMesh, convexMesh);
 
       if (resultMesh) {
         const isl = await postIslWorker(resultMesh);
@@ -504,17 +522,17 @@ function Scene({ trigger }: SceneProps) {
         // シーン更新
         concaveParent.remove(targetMesh);
         concaveParent.add(resultMesh);
-        convexParent.add(cutterMesh)
+        convexParent.add(convexMesh)
 
         // コマンド作成
         const command: Command = {
           undo: () => {
-            convexParent.remove(cutterMesh)
+            convexParent.remove(convexMesh)
             concaveParent.remove(resultMesh);
             concaveParent.add(targetMesh);
           },
           redo: () => {
-            convexParent.add(cutterMesh)
+            convexParent.add(convexMesh)
             concaveParent.remove(targetMesh);
             concaveParent.add(resultMesh);
           }
