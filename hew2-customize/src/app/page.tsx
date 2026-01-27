@@ -17,12 +17,11 @@ import {
 } from '@react-three/drei';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-// import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types'; // 環境に合わせてパスを確認してください
 import { getVec3Like, meshMatrixUpdate } from './threeUnits';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
-import { fitObject, fitObjectFast } from './camCtrl';
-
+import { fitObject } from './camCtrl';
+import { exportGroupToGLB } from './export';
 
 // ------------------------------
 // Constants & Types
@@ -314,10 +313,56 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
   }
 );
 
-function Scene() {
-  const { camera } = useThree();
+type SceneProps = {
+  trigger: boolean;
+}
 
-  const groupRef = useRef<THREE.Group>(null!);
+function Scene({ trigger }: SceneProps) {
+  const { gl, camera, size, scene } = useThree()
+  const exportGroupRef = useRef<THREE.Group>(null!);
+  const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
+
+  useLayoutEffect(() => {
+    if (!exportGroupRef.current) return;
+    const cam = camera as THREE.PerspectiveCamera;
+    fitObject(cam, exportGroupRef.current, 1.1);
+    cam.updateProjectionMatrix();
+    cameraPosRef.current.copy(cam.position);
+    console.log(cameraPosRef.current)
+  }, [camera, exportGroupRef.current]);
+
+  useEffect(() => {
+    if (!trigger) return;
+    exportGroupToGLB(exportGroupRef.current);
+
+    const cam = camera as THREE.PerspectiveCamera;
+    const prev = { ...size, cam: { ...cam.position } }
+
+    gl.setSize(512, 512);
+    cam.position.copy(cameraPosRef.current);
+    cam.aspect = 1;
+    cam.updateProjectionMatrix();
+
+    gl.render(scene, cam);
+    gl.domElement.toBlob((blob) => {
+      if (!blob) return;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'screenshot.png';
+      a.click();
+
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+
+    // 戻す
+    gl.setSize(prev.width, prev.height);
+    cam.position.copy(prev.cam);
+    cam.aspect = prev.width / prev.height;
+    cam.updateProjectionMatrix();
+  }, [trigger]);
+
   const convexGroupRef = useRef<THREE.Group>(null!);
   const concaveGroupRef = useRef<THREE.Group>(null!);
 
@@ -353,17 +398,6 @@ function Scene() {
 
     concaveGroupRef.current.add(mesh);
   }, []);
-
-  const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
-
-  useLayoutEffect(() => {
-  if (!groupRef.current) return;
-  const cam = camera as THREE.PerspectiveCamera;
-  fitObject(cam, groupRef.current, 1.1);
-  cam.updateProjectionMatrix();
-  cameraPosRef.current.copy(cam.position);
-  console.log(cameraPosRef.current)
-}, [camera, groupRef.current]);
 
   /**
      * 描画されたメッシュ(cutter)を使って、targetMeshをくり抜く
@@ -516,7 +550,7 @@ function Scene() {
       <ambientLight color={0xffffff} intensity={1} />
       <directionalLight position={[0, 5, 0]} intensity={0.4} />
 
-      <group ref={groupRef}>
+      <group ref={exportGroupRef}>
         <ManholeMesh
           ref={editMeshRef}
           mat='metal'
@@ -541,9 +575,12 @@ function Scene() {
         </mesh>
       </group>
 
-      <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
-        <GizmoViewport />
-      </GizmoHelper>
+      {!trigger && (
+        <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
+          <GizmoViewport />
+        </GizmoHelper>
+      )}
+
     </>
   );
 }
@@ -551,7 +588,11 @@ function Scene() {
 // ------------------------------
 // UI Component (Undo/Redo Button)
 // ------------------------------
-function HtmlUI() {
+type HtmlUIProps = {
+  setTrigger: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+function HtmlUI({ setTrigger }: HtmlUIProps) {
   const { undo, redo, canUndo, canRedo } = useStore(
     useShallow((state) => ({
       undo: state.undo,
@@ -591,6 +632,7 @@ function HtmlUI() {
       >
         Redo
       </button>
+      <button onClick={() => setTrigger(true)}>export</button>
     </div>
   );
 }
@@ -598,18 +640,24 @@ function HtmlUI() {
 // ------------------------------
 // Main App
 // ------------------------------
-export default function App() {
+function App() {
+  const [trigger, setTrigger] = useState<boolean>(false);
+
   return (
     <CookiesProvider>
       <div className='w-screen h-screen relative'>
-        <HtmlUI />
+        <HtmlUI setTrigger={setTrigger} />
         <Canvas
           className='block'
           style={{ background: '#d4d4d4', width: '100%', height: 'calc(100vh - var(--header-h))' }}
         >
-          <Scene />
+          <Scene trigger={trigger} />
         </Canvas>
       </div>
     </CookiesProvider>
   );
+}
+
+export default function Page() {
+  return <App />;
 }
