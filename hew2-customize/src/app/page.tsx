@@ -357,13 +357,12 @@ function Scene() {
   const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
   useLayoutEffect(() => {
-  if (!groupRef.current) return;
-  const cam = camera as THREE.PerspectiveCamera;
-  fitObject(cam, groupRef.current, 1.1);
-  cam.updateProjectionMatrix();
-  cameraPosRef.current.copy(cam.position);
-  console.log(cameraPosRef.current)
-}, [camera, groupRef.current]);
+    if (!groupRef.current) return;
+    const cam = camera as THREE.PerspectiveCamera;
+    fitObject(cam, groupRef.current, 1.1);
+    cam.updateProjectionMatrix();
+    cameraPosRef.current.copy(cam.position);
+  }, [camera, groupRef.current]);
 
   /**
      * 描画されたメッシュ(cutter)を使って、targetMeshをくり抜く
@@ -443,7 +442,6 @@ function Scene() {
 
   const handleFinDrawing = async () => {
     if (!isDrawing) return;
-    setIsDrawing(false);
 
     if (pointsRef.current.length < 2) {
       if (drawingMeshRef.current) drawingMeshRef.current.geometry.deleteAttribute('position');
@@ -506,6 +504,8 @@ function Scene() {
     drawingMeshRef.current.geometry.setIndex(null);
     // メモリリーク防止のためジオメトリ破棄
     geo.dispose();
+    setIsDrawing(false);
+
   };
 
   return (
