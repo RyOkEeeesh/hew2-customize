@@ -23,9 +23,9 @@ import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { fitObject } from './camCtrl';
 import { exportGroupToGLB } from './export';
 
-// ------------------------------
+
 // Constants & Types
-// ------------------------------
+
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
 const DENT = 0.2;
@@ -38,12 +38,10 @@ const materialOfColor: Record<Material, THREE.MeshStandardMaterialParameters> = 
   plastic: { color: '#eeeeee', metalness: 0.1, roughness: 0.8 },
 };
 
-const box1 = new THREE.Box3()
-const box2 = new THREE.Box3()
+const box1 = new THREE.Box3();
+const box2 = new THREE.Box3();
 function checkCollision(mesh1: THREE.Mesh, mesh2: THREE.Mesh): boolean {
   if (!mesh1 || !mesh2) return false
-  // updateMatrixWorldはコストがかかるため、必要なタイミングでのみ呼ぶのが良いですが、
-  // ここでは念のため呼んでおきます。
   mesh1.updateMatrixWorld();
   mesh2.updateMatrixWorld();
   box1.setFromObject(mesh1)
@@ -51,10 +49,8 @@ function checkCollision(mesh1: THREE.Mesh, mesh2: THREE.Mesh): boolean {
   return box1.intersectsBox(box2)
 }
 
-
-// ------------------------------
 // Zustand Store (Undo/Redo Logic)
-// ------------------------------
+
 interface Command {
   undo: () => void;
   redo: () => void;
@@ -99,15 +95,14 @@ const useStore = create<DrawingState>((set, get) => ({
   },
 }));
 
-// ------------------------------
+
 // WebWorker Hook
-// ------------------------------
+
 export function useWebWorker() {
   const csgWorkerRef = useRef<Worker | null>(null);
   const islWorkerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
-    // Workerのパスは環境に合わせて調整してください
     const csg = new Worker(new URL('./CSGWorker.ts', import.meta.url), { type: 'module' });
     const isl = new Worker(new URL('./islWorker.ts', import.meta.url), { type: 'module' });
     csgWorkerRef.current = csg;
@@ -207,9 +202,9 @@ export function useWebWorker() {
   return { postCsgWorker, postIslWorker };
 }
 
-// ------------------------------
+
 // Geometry Helpers
-// ------------------------------
+
 const tmpDir = new THREE.Vector2();
 const tmpNormal = new THREE.Vector2();
 
@@ -279,9 +274,9 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
   // UVは省略
 }
 
-// ------------------------------
+
 // Components
-// ------------------------------
+
 const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>(
   ({ mat, ...props }, ref) => {
     const lathePoints = [
@@ -338,29 +333,35 @@ function Scene({ trigger }: SceneProps) {
     const cam = camera as THREE.PerspectiveCamera;
     const prev = { ...size, cam: { ...cam.position } }
 
-    gl.setSize(512, 512);
-    cam.position.copy(cameraPosRef.current);
-    cam.aspect = 1;
-    cam.updateProjectionMatrix();
+    requestAnimationFrame(() => {
+      gl.setSize(512, 512);
+      cam.position.copy(cameraPosRef.current);
+      camera.lookAt(0, 0, 0);
+      cam.aspect = 1;
+      cam.updateProjectionMatrix();
 
-    gl.render(scene, cam);
-    gl.domElement.toBlob((blob) => {
-      if (!blob) return;
+      gl.render(scene, cam);
+      gl.domElement.toBlob((blob) => {
+        if (!blob) return;
 
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'screenshot.png';
-      a.click();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'screenshot.png';
+        a.click();
 
-      URL.revokeObjectURL(url);
-    }, 'image/png');
+        URL.revokeObjectURL(url);
+      }, 'image/png');
+    });
 
-    // 戻す
-    gl.setSize(prev.width, prev.height);
-    cam.position.copy(prev.cam);
-    cam.aspect = prev.width / prev.height;
-    cam.updateProjectionMatrix();
+    requestAnimationFrame(() => {
+      gl.setSize(prev.width, prev.height);
+      cam.position.copy(prev.cam);
+      cam.aspect = prev.width / prev.height;
+      cam.updateProjectionMatrix();
+      gl.render(scene, cam);
+    });
+
   }, [trigger]);
 
   const convexGroupRef = useRef<THREE.Group>(null!);
@@ -388,25 +389,20 @@ function Scene({ trigger }: SceneProps) {
     if (!editMeshRef.current || !concaveGroupRef.current) return;
     const mesh = new THREE.Mesh(
       editMeshRef.current.geometry.clone(),
-      new THREE.MeshStandardMaterial({ wireframe: true }) // 確認用にNormalMaterialを使用
+      new THREE.MeshStandardMaterial({ wireframe: true })
     );
-    // 初期位置合わせ
     mesh.position.copy(editMeshRef.current.position);
-    mesh.position.y += 0.1; // 視認用オフセット
+    mesh.position.y += 0.1;
     mesh.rotation.copy(editMeshRef.current.rotation);
     mesh.updateMatrixWorld();
 
     concaveGroupRef.current.add(mesh);
   }, []);
 
-  /**
-     * 描画されたメッシュ(cutter)を使って、targetMeshをくり抜く
-     */
   async function applySubtraction(targetMesh: THREE.Mesh, cutterMesh: THREE.Mesh): Promise<THREE.Mesh | null> {
     targetMesh.updateMatrixWorld(true);
     cutterMesh.updateMatrixWorld(true);
 
-    // 1. ワールド座標系で計算するためにBake（ここまではOK）
     const targetGeo = BufferGeometryUtils.mergeVertices(targetMesh.geometry.clone());
     targetGeo.applyMatrix4(targetMesh.matrixWorld);
 
@@ -424,16 +420,11 @@ function Scene({ trigger }: SceneProps) {
           newGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(res.result.index), 1));
         }
 
-        // ===============================================
-        // ★ここが修正ポイント
-        // ワールド座標になっているジオメトリを、親(concaveGroupRef)のローカル座標に戻す
-        // ===============================================
         if (targetMesh.parent) {
           const inverseParentMat = targetMesh.parent.matrixWorld.clone().invert();
           newGeo.applyMatrix4(inverseParentMat);
         }
 
-        // メッシュ自体のTransformはリセット（ジオメトリ自体が正しい位置にあるため）
         const newMesh = new THREE.Mesh(newGeo, targetMesh.material);
         newMesh.castShadow = true;
         newMesh.receiveShadow = true;
@@ -537,7 +528,7 @@ function Scene({ trigger }: SceneProps) {
     pointsRef.current = [];
     drawingMeshRef.current.geometry.deleteAttribute('position');
     drawingMeshRef.current.geometry.setIndex(null);
-    // メモリリーク防止のためジオメトリ破棄
+
     geo.dispose();
     setIsDrawing(false);
 
@@ -576,19 +567,17 @@ function Scene({ trigger }: SceneProps) {
         </mesh>
       </group>
 
-      {!trigger && (
-        <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
-          <GizmoViewport />
-        </GizmoHelper>
-      )}
+      <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
+        <GizmoViewport />
+      </GizmoHelper>
 
     </>
   );
 }
 
-// ------------------------------
+
 // UI Component (Undo/Redo Button)
-// ------------------------------
+
 type HtmlUIProps = {
   setTrigger: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -638,9 +627,9 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
   );
 }
 
-// ------------------------------
+
 // Main App
-// ------------------------------
+
 function App() {
   const [trigger, setTrigger] = useState<boolean>(false);
 

@@ -1,5 +1,4 @@
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { saveAs } from 'file-saver';
 import * as THREE from 'three';
 
 export function download(blob: Blob, filename: string) {
