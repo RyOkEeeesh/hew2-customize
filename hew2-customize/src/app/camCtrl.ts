@@ -52,30 +52,3 @@ export function fitObject(camera: THREE.PerspectiveCamera, object: THREE.Object3
   camera.position.copy(center).add(dir.multiplyScalar(finalDist));
   camera.lookAt(center);
 }
-
-export function fitObjectFast(camera: THREE.PerspectiveCamera, object: THREE.Object3D, offset = 1.1) {
-  object.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3());
-  const center = camera.userData.lookAt instanceof THREE.Vector3 ?
-  camera.userData.lookAt.clone():
-  box.getCenter(new THREE.Vector3());
-
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const fov = THREE.MathUtils.degToRad(camera.fov);
-  const aspect = camera.aspect;
-
-  const distForHeight = maxDim / (2 * Math.tan(fov / 2));
-  const distForWidth = distForHeight / aspect;
-  const requiredDist = Math.max(distForHeight, distForWidth) * offset;
-
-  const direction = new THREE.Vector3()
-    .subVectors(camera.position, center)
-    .normalize();
-
-  camera.position.copy(center).add(direction.multiplyScalar(requiredDist));
-  camera.lookAt(center);
-
-  return requiredDist;
-}

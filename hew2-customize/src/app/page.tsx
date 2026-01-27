@@ -7,6 +7,7 @@ import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from './store';
 import { Scene } from './manhole';
+import { Redo2, Save, Undo2 } from 'lucide-react';
 
 type HtmlUIProps = {
   setTrigger: React.Dispatch<React.SetStateAction<boolean>>;
@@ -42,17 +43,24 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
         className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
         onClick={undo}
         disabled={!canUndo}
+        title='元に戻す'
       >
-        Undo
+        <Undo2 size={20} strokeWidth={2.5} />
       </button>
       <button
         className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
         onClick={redo}
         disabled={!canRedo}
+        title='やり直す'
       >
-        Redo
+        <Redo2 size={20} strokeWidth={2.5} />
       </button>
-      <button onClick={() => setTrigger(true)}>export</button>
+      <button
+        onClick={() => setTrigger(true)}
+        title='保存'
+      >
+        <Save size={20} strokeWidth={2.5} />
+      </button>
     </div>
   );
 }
