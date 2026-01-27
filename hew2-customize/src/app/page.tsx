@@ -202,7 +202,6 @@ export function useWebWorker() {
   return { postCsgWorker, postIslWorker };
 }
 
-
 // Geometry Helpers
 
 const tmpDir = new THREE.Vector2();
@@ -230,8 +229,6 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 
     tmpNormal.set(-tmpDir.y, tmpDir.x).multiplyScalar(radius);
 
-    // 0:上左, 1:上右, 2:底左, 3:底右
-    // 上面を depth (Z=0.2), 底面を 0 (Z=0) と仮定
     vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, depth);
     vertices.push(curr.x - tmpNormal.x, curr.y - tmpNormal.y, depth);
     vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, 0);
@@ -239,29 +236,23 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
 
     const currIdx = 4 * i;
 
-    // 蓋 (始点)
     if (i === 0) {
       indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
       indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
     }
 
-    // 側面・上面・底面
     if (i > 0) {
       const prev = 4 * (i - 1);
-      // 上面
       indices.push(prev + 0, prev + 1, currIdx + 0);
       indices.push(prev + 1, currIdx + 1, currIdx + 0);
-      // 底面
       indices.push(prev + 2, currIdx + 2, prev + 3);
       indices.push(prev + 3, currIdx + 2, currIdx + 3);
-      // 側面
       indices.push(prev + 0, currIdx + 0, prev + 2);
       indices.push(prev + 2, currIdx + 0, currIdx + 2);
       indices.push(prev + 1, prev + 3, currIdx + 1);
       indices.push(prev + 3, currIdx + 3, currIdx + 1);
     }
 
-    // 蓋 (終点)
     if (i === points.length - 1 && i > 0) {
       indices.push(currIdx + 0, currIdx + 1, currIdx + 2);
       indices.push(currIdx + 1, currIdx + 3, currIdx + 2);
@@ -271,13 +262,11 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
   geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  // UVは省略
 }
-
 
 // Components
 
-const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>(
+const ManholeMesh = forwardRef<THREE.Mesh, { mat: THREE.MeshStandardMaterial;[key: string]: any }>(
   ({ mat, ...props }, ref) => {
     const lathePoints = [
       new THREE.Vector2(0, 0),
@@ -290,9 +279,8 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
 
     return (
       <>
-        <mesh position={[0, -THICKNESS / 2, 0]}>
+        <mesh position={[0, -THICKNESS / 2, 0]} material={mat}>
           <latheGeometry args={[lathePoints, 128]} />
-          <meshStandardMaterial {...materialOfColor[mat as Material]} side={THREE.DoubleSide} />
         </mesh>
         <mesh
           ref={ref}
@@ -310,12 +298,15 @@ const ManholeMesh = forwardRef<THREE.Mesh, { mat: Material;[key: string]: any }>
 
 type SceneProps = {
   trigger: boolean;
+  material?: Material;
 }
 
-function Scene({ trigger }: SceneProps) {
+function Scene({ trigger, material = 'metal' }: SceneProps) {
   const { gl, camera, size, scene } = useThree()
   const exportGroupRef = useRef<THREE.Group>(null!);
   const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
+
+  const baseMat = new THREE.MeshStandardMaterial({ ...materialOfColor[material] });
 
   useLayoutEffect(() => {
     if (!exportGroupRef.current) return;
@@ -383,7 +374,6 @@ function Scene({ trigger }: SceneProps) {
     }
   });
 
-
   useEffect(() => {
     if (!editMeshRef.current || !concaveGroupRef.current) return;
     const mesh = new THREE.Mesh(
@@ -439,23 +429,23 @@ function Scene({ trigger }: SceneProps) {
   async function getSeparateMeshes(mesh: THREE.Mesh) {
     const res = await postIslWorker(mesh);
     if (!res.success || !res.result) return null;
+
     const meshArr: THREE.Mesh[] = [];
     for (const { position, normal } of res.result) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
       geo.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
-      geo.computeBoundingBox();
-      geo.computeBoundingSphere();
-      meshArr.push(
-        new THREE.Mesh(
-          geo,
-          mesh.material
-        )
-      )
+      const newMesh = new THREE.Mesh(geo, (mesh.material as THREE.MeshStandardMaterial).clone());
+      newMesh.castShadow = true;
+      newMesh.receiveShadow = true;
+
+      meshArr.push(newMesh);
     }
+    return meshArr;
   }
 
   // --- Event Handlers ---
+
   const pointerEventTmpVec3 = useRef<THREE.Vector3>(new THREE.Vector3());
 
   const onPointerDown = (e: ThreeEvent<PointerEvent>) => {
@@ -486,70 +476,88 @@ function Scene({ trigger }: SceneProps) {
 
   const handleFinDrawing = async () => {
     if (!isDrawing) return;
+    setIsDrawing(false);
 
     if (pointsRef.current.length < 2) {
-      if (drawingMeshRef.current) drawingMeshRef.current.geometry.deleteAttribute('position');
+      if (drawingMeshRef.current) {
+        drawingMeshRef.current.geometry.deleteAttribute('position');
+        drawingMeshRef.current.geometry.setIndex(null);
+      }
       return;
     }
 
+    // 1. カッター用のジオメトリ作成
     const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
-
     const convexMesh = new THREE.Mesh(geo);
-
-    // 位置合わせ
     convexMesh.position.copy(drawingMeshRef.current.position);
     convexMesh.rotation.copy(drawingMeshRef.current.rotation);
+    convexMesh.updateMatrixWorld(true);
 
     const concaveParent = concaveGroupRef.current;
-    const children = concaveParent.children.filter(o => o instanceof THREE.Mesh) as THREE.Mesh[];
-    const targetMeshArr = children.filter(m => checkCollision(m, convexMesh));
 
-    const convexParent = convexGroupRef.current;
+    // 現在表示されている全てのメッシュを取得
+    let currentMeshes = concaveParent.children.filter(o => o instanceof THREE.Mesh) as THREE.Mesh[];
+    const originalState = [...currentMeshes]; // Undo用
 
-    if (targetMeshArr.length > 0) {
-      for (const targetMesh of targetMeshArr) {
+    let anyChanged = false;
+    const nextMeshes: THREE.Mesh[] = [];
+    const targetsToRemove: THREE.Mesh[] = [];
 
-      }
-      // 計算実行
-      const resultMesh = await applySubtraction(targetMesh, convexMesh);
+    // 2. 各メッシュに対して衝突判定と引き算を実行
+    for (const mesh of currentMeshes) {
+      if (checkCollision(mesh, convexMesh)) {
+        anyChanged = true;
+        targetsToRemove.push(mesh);
 
-      if (resultMesh) {
-        const isl = await postIslWorker(resultMesh);
-        console.log(isl);
-        // --- 3. メッシュの入れ替えとUndo/Redo登録 ---
-
-        // シーン更新
-        concaveParent.remove(targetMesh);
-        concaveParent.add(resultMesh);
-        convexParent.add(convexMesh)
-
-        // コマンド作成
-        const command: Command = {
-          undo: () => {
-            convexParent.remove(convexMesh)
-            concaveParent.remove(resultMesh);
-            concaveParent.add(targetMesh);
-          },
-          redo: () => {
-            convexParent.add(convexMesh)
-            concaveParent.remove(targetMesh);
-            concaveParent.add(resultMesh);
+        // CSG実行
+        const subMesh = await applySubtraction(mesh, convexMesh);
+        if (subMesh) {
+          // 独立したパーツに分解
+          const separated = await getSeparateMeshes(subMesh);
+          if (separated && separated.length > 0) {
+            nextMeshes.push(...separated);
           }
-        };
-
-        pushCommand(command);
+          // 一時的なsubMeshのジオメトリはseparatedにコピーされているので破棄
+          subMesh.geometry.dispose();
+        }
+      } else {
+        // 衝突していないものはそのまま残す
+        nextMeshes.push(mesh);
       }
     }
 
-    // リセット
+    if (anyChanged) {
+      // 3. シーンの更新
+      concaveParent.remove(...targetsToRemove);
+      concaveParent.add(...nextMeshes);
+      convexGroupRef.current.add(convexMesh);
+
+      // 4. コマンド作成
+      const command: Command = {
+        undo: () => {
+          convexGroupRef.current.remove(convexMesh);
+          concaveParent.remove(...nextMeshes);
+          concaveParent.add(...originalState);
+        },
+        redo: () => {
+          convexGroupRef.current.add(convexMesh);
+          concaveParent.remove(...originalState);
+          concaveParent.add(...nextMeshes);
+        }
+      };
+      pushCommand(command);
+    } else {
+      // 何も削れなかった場合はカッターを捨てる
+      geo.dispose();
+    }
+
+    // 5. お掃除
     pointsRef.current = [];
     drawingMeshRef.current.geometry.deleteAttribute('position');
     drawingMeshRef.current.geometry.setIndex(null);
 
-    geo.dispose();
-    setIsDrawing(false);
-
+    console.log(nextMeshes);
   };
 
   return (
@@ -563,7 +571,7 @@ function Scene({ trigger }: SceneProps) {
       <group ref={exportGroupRef}>
         <ManholeMesh
           ref={editMeshRef}
-          mat='metal'
+          mat={baseMat}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={handleFinDrawing}
@@ -573,7 +581,6 @@ function Scene({ trigger }: SceneProps) {
         <group ref={convexGroupRef}></group>
         <group ref={concaveGroupRef}></group>
 
-        {/* 描画中のプレビュー用メッシュ */}
         <mesh
           ref={drawingMeshRef}
           visible={isDrawing}
