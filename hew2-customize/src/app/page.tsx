@@ -477,7 +477,6 @@ function Scene({ trigger }: SceneProps) {
 
   const handleFinDrawing = async () => {
     if (!isDrawing) return;
-    setIsDrawing(false);
 
     if (pointsRef.current.length < 2) {
       if (drawingMeshRef.current) drawingMeshRef.current.geometry.deleteAttribute('position');
@@ -540,6 +539,8 @@ function Scene({ trigger }: SceneProps) {
     drawingMeshRef.current.geometry.setIndex(null);
     // メモリリーク防止のためジオメトリ破棄
     geo.dispose();
+    setIsDrawing(false);
+
   };
 
   return (
