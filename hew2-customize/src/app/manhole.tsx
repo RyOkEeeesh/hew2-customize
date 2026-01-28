@@ -20,9 +20,6 @@ import { fitObject } from './camCtrl';
 import { exportGroupToGLB } from './export';
 import { useStore, type Command } from './store';
 
-
-// Constants & Types
-
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
 const DENT = 0.2;
@@ -82,7 +79,6 @@ function useWebWorker() {
       CSGWorker.addEventListener('message', handleMessage);
       CSGWorker.addEventListener('error', handleError);
 
-      // indexがない場合のフォールバック
       const indexA = geoA.index ? geoA.index.array.slice() : undefined;
       const indexB = geoB.index ? geoB.index.array.slice() : undefined;
 
@@ -319,8 +315,6 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
 
   const pushCommand = useStore(s => s.pushCommand);
 
-
-
   const { postCsgWorker, postIslWorker } = useWebWorker();
 
   const applySubtraction = async (targetMesh: THREE.Mesh, convexMesh: THREE.Mesh) => {
@@ -511,7 +505,7 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
             // ① クリックされた「一番手前のメッシュ」はこれ
             const clickedMesh = e.object as THREE.Mesh;
             console.log(clickedMesh);
-            (clickedMesh.material as THREE.MeshStandardMaterial).color.set(255, 255, 255);
+            // (clickedMesh.material as THREE.MeshStandardMaterial).color.set(255, 255, 255);
 
             // ③ 貫通した「すべてのオブジェクト」の情報（距離順）
             // const allIntersections = e.intersections;
