@@ -21,7 +21,6 @@ export function exportGroupToGLB(group: THREE.Group) {
         type: 'model/gltf-binary',
       });
       download(blob, 'model.glb');
-      console.log(blob)
     },
     (error) => {
       console.error(error);
