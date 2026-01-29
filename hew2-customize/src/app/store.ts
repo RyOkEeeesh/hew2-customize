@@ -3,9 +3,10 @@ import { create } from 'zustand';
 export interface Command {
   undo: () => void;
   redo: () => void;
+  dispose?: () => void;
 }
 
-interface DrawingState {
+type StoreState = {
   undoStack: Command[];
   redoStack: Command[];
   pushCommand: (cmd: Command) => void;
@@ -13,10 +14,12 @@ interface DrawingState {
   redo: () => void;
 }
 
-export const useStore = create<DrawingState>((set, get) => ({
+export const useStore = create<StoreState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   pushCommand: (cmd) => {
+    const { redoStack } = get();
+    redoStack.forEach(c => c.dispose?.());
     set((state) => ({
       undoStack: [...state.undoStack, cmd],
       redoStack: [],
@@ -42,4 +45,39 @@ export const useStore = create<DrawingState>((set, get) => ({
       undoStack: [...undoStack, cmd],
     });
   },
+}));
+
+type ToolType = 'pen' | 'bucket';
+
+type ToolsState = {
+  tool: ToolType | null;
+  penWidth: number;
+  color: number;
+  colors: number[];
+
+  setTool: (tool: ToolType | null) => void;
+  setPenWidth: (penWidth: number) => void;
+  setColor: (color: number) => void;
+  setColors: (colors: number[]) => void
+  pushColors: (c: number) => void;
+};
+
+export const maxClrLen = 6;
+
+const useTools = create<ToolsState>((set, get) => ({
+  tool: null,
+  penWidth: 1,
+  color: 0x000,
+  colors: [],
+
+  setTool: tool => set({tool}),
+  setPenWidth: penWidth => set({penWidth}),
+  setColor: color => set({color}),
+  setColors: colors => set({colors}),
+  pushColors: color => {
+    const clr = get().colors.slice();
+    clr.unshift(color);
+    set({colors: clr.slice(0, maxClrLen)});
+  }
+
 }));

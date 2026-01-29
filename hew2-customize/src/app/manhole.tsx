@@ -19,6 +19,7 @@ import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { fitObject } from './camCtrl';
 import { exportGroupToGLB } from './export';
 import { useStore, type Command } from './store';
+import { meshAttrDispose } from './threeUnits';
 
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
@@ -459,6 +460,10 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
           convexGroupRef.current.add(convexMesh);
           concaveParent.remove(...originalState);
           concaveParent.add(...nextMeshes);
+        },
+        dispose: () => {
+          nextMeshes.forEach(m => meshAttrDispose(m));
+          convexMesh.geometry.dispose();
         }
       };
       pushCommand(command);
@@ -505,7 +510,7 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
             // ① クリックされた「一番手前のメッシュ」はこれ
             const clickedMesh = e.object as THREE.Mesh;
             console.log(clickedMesh);
-            // (clickedMesh.material as THREE.MeshStandardMaterial).color.set(255, 255, 255);
+            (clickedMesh.material as THREE.MeshStandardMaterial).color.set(0xff0000);
 
             // ③ 貫通した「すべてのオブジェクト」の情報（距離順）
             // const allIntersections = e.intersections;

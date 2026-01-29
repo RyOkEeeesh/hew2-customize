@@ -7,10 +7,19 @@ import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from './store';
 import { Scene } from './manhole';
-import { Redo2, Save, Undo2 } from 'lucide-react';
+import { PaintBucket, Pen, Redo2, Save, Undo2 } from 'lucide-react';
+import { ChromePicker, CirclePicker, type ColorResult } from 'react-color';
 
 type HtmlUIProps = {
   setTrigger: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+function ToolOptions() {
+  return (
+    <ChromePicker
+      disableAlpha={true}
+    />
+  )
 }
 
 function HtmlUI({ setTrigger }: HtmlUIProps) {
@@ -40,7 +49,20 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
   return (
     <div className='flex gap-4 absolute top-4 right-4 z-10'>
       <button
-        className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
+        onClick={() => {}}
+        disabled={!canUndo}
+        title='元に戻す'
+      >
+        <Pen size={20} strokeWidth={2.5} />
+      </button>
+      <button
+        onClick={() => {}}
+        disabled={!canUndo}
+        title='色'
+      >
+        <PaintBucket size={20} strokeWidth={2.5} />
+      </button>
+      <button
         onClick={undo}
         disabled={!canUndo}
         title='元に戻す'
@@ -48,7 +70,6 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
         <Undo2 size={20} strokeWidth={2.5} />
       </button>
       <button
-        className="bg-white px-4 py-2 rounded shadow disabled:opacity-50"
         onClick={redo}
         disabled={!canRedo}
         title='やり直す'
@@ -61,6 +82,7 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
       >
         <Save size={20} strokeWidth={2.5} />
       </button>
+      <ToolOptions />
     </div>
   );
 }
