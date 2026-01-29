@@ -52,32 +52,34 @@ type ToolType = 'pen' | 'bucket';
 type ToolsState = {
   tool: ToolType | null;
   penWidth: number;
-  color: number;
-  colors: number[];
+  baseColor: string;
+  color: string;
+  colors: string[];
 
   setTool: (tool: ToolType | null) => void;
   setPenWidth: (penWidth: number) => void;
-  setColor: (color: number) => void;
-  setColors: (colors: number[]) => void
-  pushColors: (c: number) => void;
+  setBaseColor: (baseColor: string) => void;
+  setColor: (color: string) => void;
+  setColors: (colors: string[]) => void
+  pushColors: (c: string) => void;
 };
 
 export const maxClrLen = 6;
 
-const useTools = create<ToolsState>((set, get) => ({
+export const useTools = create<ToolsState>((set, get) => ({
   tool: null,
   penWidth: 1,
-  color: 0x000,
+  baseColor: null!,
+  color: '0x000',
   colors: [],
 
   setTool: tool => set({tool}),
   setPenWidth: penWidth => set({penWidth}),
+  setBaseColor: baseColor => set({baseColor}),
   setColor: color => set({color}),
   setColors: colors => set({colors}),
   pushColors: color => {
-    const clr = get().colors.slice();
-    clr.unshift(color);
-    set({colors: clr.slice(0, maxClrLen)});
+    const colors = [color, ...get().colors.filter(c => c !== color)].slice(0, maxClrLen);
+    set({colors});
   }
-
 }));

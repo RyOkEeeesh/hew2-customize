@@ -5,7 +5,7 @@ import React, {
 import { CookiesProvider, useCookies } from 'react-cookie';
 import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
-import { useStore } from './store';
+import { useStore, useTools } from './store';
 import { Scene } from './manhole';
 import { PaintBucket, Pen, Redo2, Save, Undo2 } from 'lucide-react';
 import { ChromePicker, CirclePicker, type ColorResult } from 'react-color';
@@ -15,20 +15,34 @@ type HtmlUIProps = {
 }
 
 function ToolOptions() {
+  const { baseColor,color, colors, setColor, pushColors } = useTools(useShallow(s => ({ ...s })));
   return (
-    <ChromePicker
-      disableAlpha={true}
-    />
+    <>
+      { baseColor &&
+      <CirclePicker
+        colors={[...colors, baseColor]}
+        onChangeComplete={c => setColor(c.hex)}
+      /> }
+      <ChromePicker
+        color={color}
+        disableAlpha={true}
+        onChangeComplete={c => {
+          setColor(c.hex);
+          pushColors(c.hex);
+        }}
+      />
+    </>
+
   )
 }
 
 function HtmlUI({ setTrigger }: HtmlUIProps) {
   const { undo, redo, canUndo, canRedo } = useStore(
-    useShallow((state) => ({
-      undo: state.undo,
-      redo: state.redo,
-      canUndo: state.undoStack.length > 0,
-      canRedo: state.redoStack.length > 0,
+    useShallow(s => ({
+      undo: s.undo,
+      redo: s.redo,
+      canUndo: s.undoStack.length > 0,
+      canRedo: s.redoStack.length > 0,
     }))
   );
 
@@ -49,14 +63,14 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
   return (
     <div className='flex gap-4 absolute top-4 right-4 z-10'>
       <button
-        onClick={() => {}}
+        onClick={() => { }}
         disabled={!canUndo}
         title='元に戻す'
       >
         <Pen size={20} strokeWidth={2.5} />
       </button>
       <button
-        onClick={() => {}}
+        onClick={() => { }}
         disabled={!canUndo}
         title='色'
       >
@@ -94,20 +108,22 @@ function App() {
   const [trigger, setTrigger] = useState<boolean>(false);
 
   return (
-    <CookiesProvider>
-      <div className='w-screen h-screen relative'>
-        <HtmlUI setTrigger={setTrigger} />
-        <Canvas
-          className='block'
-          style={{ background: '#d4d4d4', width: '100%', height: 'calc(100vh - var(--header-h))' }}
-        >
-          <Scene trigger={trigger} />
-        </Canvas>
-      </div>
-    </CookiesProvider>
+    <div className='w-screen h-screen relative'>
+      <HtmlUI setTrigger={setTrigger} />
+      <Canvas
+        className='block'
+        style={{ background: '#d4d4d4', width: '100%', height: 'calc(100vh - var(--header-h))' }}
+      >
+        <Scene trigger={trigger} />
+      </Canvas>
+    </div>
   );
 }
 
 export default function Page() {
-  return <App />;
+  return (
+    <CookiesProvider>
+      <App />
+    </CookiesProvider>
+  );
 }

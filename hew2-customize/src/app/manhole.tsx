@@ -18,8 +18,9 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { fitObject } from './camCtrl';
 import { exportGroupToGLB } from './export';
-import { useStore, type Command } from './store';
+import { maxClrLen, useStore, useTools, type Command } from './store';
 import { meshAttrDispose } from './threeUnits';
+import { useShallow } from 'zustand/react/shallow';
 
 const EXTERNAL_SHAPE = 6.5;
 const THICKNESS = 0.5;
@@ -247,7 +248,15 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
   const exportGroupRef = useRef<THREE.Group>(null!);
   const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
+  const { setColor, setBaseColor } = useTools(useShallow(s => ({ ...s })));
+
   const baseMat = new THREE.MeshStandardMaterial({ ...materialOfColor[material] });
+
+  useEffect(() => {
+    const hex = `#${baseMat.color.getHexString()}`;
+    setColor(hex);
+    setBaseColor(hex);
+  }, []);
 
   useLayoutEffect(() => {
     if (!exportGroupRef.current) return;
@@ -288,7 +297,6 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
     cam.aspect = prev.width / prev.height;
     cam.updateProjectionMatrix();
     gl.render(scene, cam);
-
   }, [trigger]);
 
   const convexGroupRef = useRef<THREE.Group>(null!);
