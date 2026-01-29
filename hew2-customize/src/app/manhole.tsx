@@ -10,15 +10,14 @@ import { useFrame, useThree } from '@react-three/fiber';
 import type { ThreeEvent } from '@react-three/fiber';
 import {
   OrbitControls,
+  PresentationControls,
   PerspectiveCamera,
-  GizmoHelper,
-  GizmoViewport,
 } from '@react-three/drei';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CSGMsg, CSGResult, CSGType, IslMsg, IslResult } from './types';
 import { fitObject } from './camCtrl';
 import { exportGroupToGLB } from './export';
-import { maxClrLen, useStore, useTools, type Command } from './store';
+import { useStore, useTools, type Command, type ToolType } from './store';
 import { meshAttrDispose } from './threeUnits';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -161,16 +160,17 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
   const radius = 0.1;
   const depth = DENT;
   const vertices: number[] = [];
-  const indices: number[] = [];
+
+  const topIndices: number[] = [];
+  const otherIndices: number[] = [];
 
   for (let i = 0; i < points.length; i++) {
     const curr = points[i];
-
-    if (i < points.length - 1)
+    if (i < points.length - 1) {
       tmpDir.set(points[i + 1].x - curr.x, points[i + 1].y - curr.y).normalize();
-    else if (i > 0)
+    } else if (i > 0) {
       tmpDir.set(curr.x - points[i - 1].x, curr.y - points[i - 1].y).normalize();
-
+    }
     tmpNormal.set(-tmpDir.y, tmpDir.x).multiplyScalar(radius);
 
     vertices.push(curr.x + tmpNormal.x, curr.y + tmpNormal.y, depth);
@@ -181,30 +181,35 @@ function updateGeometry(geo: THREE.BufferGeometry, points: THREE.Vector2Like[]) 
     const currIdx = 4 * i;
 
     if (i === 0) {
-      indices.push(currIdx + 0, currIdx + 2, currIdx + 1);
-      indices.push(currIdx + 1, currIdx + 2, currIdx + 3);
+      otherIndices.push(currIdx + 0, currIdx + 2, currIdx + 1);
+      otherIndices.push(currIdx + 1, currIdx + 2, currIdx + 3);
     }
 
     if (i > 0) {
       const prev = 4 * (i - 1);
-      indices.push(prev + 0, prev + 1, currIdx + 0);
-      indices.push(prev + 1, currIdx + 1, currIdx + 0);
-      indices.push(prev + 2, currIdx + 2, prev + 3);
-      indices.push(prev + 3, currIdx + 2, currIdx + 3);
-      indices.push(prev + 0, currIdx + 0, prev + 2);
-      indices.push(prev + 2, currIdx + 0, currIdx + 2);
-      indices.push(prev + 1, prev + 3, currIdx + 1);
-      indices.push(prev + 3, currIdx + 3, currIdx + 1);
+      // 天面
+      topIndices.push(prev + 0, prev + 1, currIdx + 0);
+      topIndices.push(prev + 1, currIdx + 1, currIdx + 0);
+      // 底面と側面
+      otherIndices.push(prev + 2, currIdx + 2, prev + 3);
+      otherIndices.push(prev + 3, currIdx + 2, currIdx + 3);
+      otherIndices.push(prev + 0, currIdx + 0, prev + 2);
+      otherIndices.push(prev + 2, currIdx + 0, currIdx + 2);
+      otherIndices.push(prev + 1, prev + 3, currIdx + 1);
+      otherIndices.push(prev + 3, currIdx + 3, currIdx + 1);
     }
 
     if (i === points.length - 1 && i > 0) {
-      indices.push(currIdx + 0, currIdx + 1, currIdx + 2);
-      indices.push(currIdx + 1, currIdx + 3, currIdx + 2);
+      otherIndices.push(currIdx + 0, currIdx + 1, currIdx + 2);
+      otherIndices.push(currIdx + 1, currIdx + 3, currIdx + 2);
     }
   }
 
   geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geo.setIndex(indices);
+  geo.setIndex([...topIndices, ...otherIndices]);
+  geo.clearGroups();
+  geo.addGroup(0, topIndices.length, 0);
+  geo.addGroup(topIndices.length, otherIndices.length, 1);
   geo.computeVertexNormals();
 }
 
@@ -243,20 +248,21 @@ type SceneProps = {
   material?: Material;
 }
 
+type ConvexMeshMat = [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial];
+
 export function Scene({ trigger, material = 'metal' }: SceneProps) {
   const { gl, camera, size, scene } = useThree()
   const exportGroupRef = useRef<THREE.Group>(null!);
   const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
 
-  const { setColor, setBaseColor } = useTools(useShallow(s => ({ ...s })));
+  const { tool, color, setColor, setBaseColor } = useTools(useShallow(s => ({ ...s })));
+  const baseMatRef = useRef<THREE.MeshStandardMaterial>(new THREE.MeshStandardMaterial({ ...materialOfColor[material] }));
 
-  const baseMat = new THREE.MeshStandardMaterial({ ...materialOfColor[material] });
-
-  useEffect(() => {
-    const hex = `#${baseMat.color.getHexString()}`;
-    setColor(hex);
-    setBaseColor(hex);
-  }, []);
+  const getConvexMat = () => {
+    const mats = [baseMatRef.current.clone(), baseMatRef.current];
+    mats[0].color.set(color);
+    return mats;
+  }
 
   useLayoutEffect(() => {
     if (!exportGroupRef.current) return;
@@ -304,10 +310,13 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
   const editMeshRef = useRef<THREE.Mesh>(null!);
 
   useEffect(() => {
+    const hex = `#${baseMatRef.current.color.getHexString()}`;
+    setColor(hex);
+    setBaseColor(hex);
     if (!editMeshRef.current || !concaveGroupRef.current) return;
     const mesh = new THREE.Mesh(
       editMeshRef.current.geometry.clone(),
-      baseMat.clone()
+      baseMatRef.current.clone()
     );
     mesh.position.copy(editMeshRef.current.position);
     mesh.position.y += 0.1;
@@ -411,8 +420,6 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
 
   const handleFinDrawing = async () => {
     if (!isDrawing) return;
-    setIsDrawing(false);
-
     if (pointsRef.current.length < 2) {
       if (drawingMeshRef.current) {
         drawingMeshRef.current.geometry.deleteAttribute('position');
@@ -423,7 +430,7 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
 
     const geo = new THREE.BufferGeometry();
     updateGeometry(geo, pointsRef.current);
-    const convexMesh = new THREE.Mesh(geo);
+    const convexMesh = new THREE.Mesh(geo, getConvexMat());
     convexMesh.position.copy(drawingMeshRef.current.position);
     convexMesh.rotation.copy(drawingMeshRef.current.rotation);
     convexMesh.updateMatrixWorld(true);
@@ -431,7 +438,7 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
     const concaveParent = concaveGroupRef.current;
 
     const currentMeshes = concaveParent.children.filter(o => o instanceof THREE.Mesh) as THREE.Mesh[];
-    const originalState = [...currentMeshes]; // Undo用
+    const originalState = [...currentMeshes];
 
     let anyChanged = false;
     const nextMeshes: THREE.Mesh[] = [];
@@ -482,8 +489,43 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
     pointsRef.current = [];
     drawingMeshRef.current.geometry.deleteAttribute('position');
     drawingMeshRef.current.geometry.setIndex(null);
+    setIsDrawing(false);
+  };
 
-    console.log(nextMeshes);
+  const getMatForPaint = (m: THREE.Mesh) => (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial;
+  const beforeMatClrMapRef = useRef<Map<string, THREE.Color>>(new Map());
+
+  const handlePaintPreview = ({ object }: ThreeEvent<PointerEvent>) => {
+    const mesh = object as THREE.Mesh;
+    const mat = getMatForPaint(mesh);
+    if (!beforeMatClrMapRef.current.has(mesh.uuid)) beforeMatClrMapRef.current.set(mesh.uuid, mat.color.clone());
+    mat.color.set(color);
+  };
+
+  const handlePaintPreBack = ({ object }: ThreeEvent<PointerEvent>) => {
+    const mesh = object as THREE.Mesh;
+    const oldColor = beforeMatClrMapRef.current.get(mesh.uuid);
+    if (!oldColor) return;
+    const mat = getMatForPaint(mesh);
+    mat.color.copy(oldColor as THREE.Color);
+    beforeMatClrMapRef.current.delete(mesh.uuid);
+  };
+
+  const handlePaint = ({ object }: ThreeEvent<PointerEvent>) => {
+    const mesh = object as THREE.Mesh;
+    const mat = getMatForPaint(mesh);
+    const oldColor = beforeMatClrMapRef.current.get(mesh.uuid)?.clone() || mat.color.clone();
+    const newColor = new THREE.Color(color);
+    const command: Command = {
+      undo: () => {
+        getMatForPaint(mesh).color.copy(oldColor);
+      },
+      redo: () => {
+        getMatForPaint(mesh).color.copy(newColor);
+      },
+    };
+    pushCommand(command);
+    beforeMatClrMapRef.current.delete(mesh.uuid);
   };
 
   useFrame(() => {
@@ -493,53 +535,58 @@ export function Scene({ trigger, material = 'metal' }: SceneProps) {
     }
   });
 
+  const isPen = tool === 'pen';
+  const isBucket = tool === 'bucket';
+
   return (
     <>
       <PerspectiveCamera makeDefault position={[0, 20, 0]} fov={45} />
-      <OrbitControls makeDefault enableRotate={!isDrawing} />
+      <OrbitControls makeDefault enableRotate={false} />
 
       <ambientLight color={0xffffff} intensity={1} />
       <directionalLight position={[0, 5, 0]} intensity={0.4} />
 
-      <group ref={exportGroupRef}>
-        <ManholeMesh
-          ref={editMeshRef}
-          mat={baseMat}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={handleFinDrawing}
-          onPointerLeave={handleFinDrawing}
-        />
+      <PresentationControls
+        enabled={tool === 'rotate'}
+        global
+        snap
+        rotation={[0, 0, 0]}
+        polar={[-Math.PI / 3, Math.PI / 3]}
+        azimuth={[-Math.PI / 2, Math.PI / 2]}
+      >
+        <group ref={exportGroupRef}>
+          <ManholeMesh
+            ref={editMeshRef}
+            mat={baseMatRef.current}
+            onPointerDown={isPen && onPointerDown}
+            onPointerMove={isPen && onPointerMove}
+            onPointerUp={isPen && handleFinDrawing}
+            onPointerLeave={isPen && handleFinDrawing}
+          />
+          <group
+            ref={convexGroupRef}
+            onClick={isBucket && handlePaint}
+            onPointerEnter={isBucket && handlePaintPreview}
+            onPointerLeave={isBucket && handlePaintPreBack}
+          />
+          <group
+            ref={concaveGroupRef}
+            onClick={isBucket && handlePaint}
+            onPointerEnter={isBucket && handlePaintPreview}
+            onPointerLeave={isBucket && handlePaintPreBack}
+          />
 
-        <group ref={convexGroupRef}></group>
-        <group
-          ref={concaveGroupRef}
-          onClick={(e) => {
-            // ① クリックされた「一番手前のメッシュ」はこれ
-            const clickedMesh = e.object as THREE.Mesh;
-            console.log(clickedMesh);
-            (clickedMesh.material as THREE.MeshStandardMaterial).color.set(0xff0000);
-
-            // ③ 貫通した「すべてのオブジェクト」の情報（距離順）
-            // const allIntersections = e.intersections;
-          }}
-        ></group>
-
-        <mesh
-          ref={drawingMeshRef}
-          visible={isDrawing}
-          position={[0, THICKNESS / 2 - DENT, 0]}
-          rotation={[-Math.PI / 2, 0, 0]}
-        >
-          <bufferGeometry />
-          <meshStandardMaterial color='orange' side={THREE.DoubleSide} />
-        </mesh>
-      </group>
-
-      <GizmoHelper alignment='bottom-right' margin={[80, 80]}>
-        <GizmoViewport />
-      </GizmoHelper>
-
+          <mesh
+            ref={drawingMeshRef}
+            visible={isDrawing}
+            position={[0, THICKNESS / 2 - DENT, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <bufferGeometry />
+            <meshStandardMaterial color={color} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      </PresentationControls>
     </>
   );
 }

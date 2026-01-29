@@ -47,16 +47,16 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 }));
 
-type ToolType = 'pen' | 'bucket';
+export type ToolType = 'rotate' | 'pen' | 'bucket';
 
 type ToolsState = {
-  tool: ToolType | null;
+  tool: ToolType;
   penWidth: number;
   baseColor: string;
   color: string;
   colors: string[];
 
-  setTool: (tool: ToolType | null) => void;
+  setTool: (tool: ToolType) => void;
   setPenWidth: (penWidth: number) => void;
   setBaseColor: (baseColor: string) => void;
   setColor: (color: string) => void;
@@ -67,10 +67,10 @@ type ToolsState = {
 export const maxClrLen = 6;
 
 export const useTools = create<ToolsState>((set, get) => ({
-  tool: null,
+  tool: 'rotate',
   penWidth: 1,
   baseColor: null!,
-  color: '0x000',
+  color: '0x666666',
   colors: [],
 
   setTool: tool => set({tool}),

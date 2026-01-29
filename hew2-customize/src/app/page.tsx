@@ -7,7 +7,7 @@ import { Canvas } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore, useTools } from './store';
 import { Scene } from './manhole';
-import { PaintBucket, Pen, Redo2, Save, Undo2 } from 'lucide-react';
+import { Hand, PaintBucket, Pen, Redo2, RotateCw, Save, Undo2 } from 'lucide-react';
 import { ChromePicker, CirclePicker, type ColorResult } from 'react-color';
 
 type HtmlUIProps = {
@@ -15,14 +15,14 @@ type HtmlUIProps = {
 }
 
 function ToolOptions() {
-  const { baseColor,color, colors, setColor, pushColors } = useTools(useShallow(s => ({ ...s })));
+  const { baseColor, color, colors, setColor, pushColors } = useTools(useShallow(s => ({ ...s })));
   return (
     <>
-      { baseColor &&
-      <CirclePicker
-        colors={[...colors, baseColor]}
-        onChangeComplete={c => setColor(c.hex)}
-      /> }
+      {baseColor &&
+        <CirclePicker
+          colors={[...colors, baseColor]}
+          onChangeComplete={c => setColor(c.hex)}
+        />}
       <ChromePicker
         color={color}
         disableAlpha={true}
@@ -46,6 +46,9 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
     }))
   );
 
+  const { tool, setTool } = useTools(useShallow(s => ({ ...s })));
+
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
@@ -63,15 +66,22 @@ function HtmlUI({ setTrigger }: HtmlUIProps) {
   return (
     <div className='flex gap-4 absolute top-4 right-4 z-10'>
       <button
-        onClick={() => { }}
-        disabled={!canUndo}
-        title='元に戻す'
+        onClick={() => setTool('rotate')}
+        disabled={tool === 'rotate'}
+        title='プレビュー'
+      >
+        <Hand size={20} strokeWidth={2.5} />
+      </button>
+      <button
+        onClick={() => setTool('pen')}
+        disabled={tool === 'pen'}
+        title='ペン'
       >
         <Pen size={20} strokeWidth={2.5} />
       </button>
       <button
-        onClick={() => { }}
-        disabled={!canUndo}
+        onClick={() => setTool('bucket')}
+        disabled={tool === 'bucket'}
         title='色'
       >
         <PaintBucket size={20} strokeWidth={2.5} />
